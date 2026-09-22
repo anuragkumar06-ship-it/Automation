@@ -30,13 +30,41 @@ If a check fails you get a plain-English message saying what is wrong.
 
 ---
 
-## Two ways to use it
+## Three ways to use it
 
-**Google Colab** is the easy way. Nothing to install, works in a browser, no
-typing of commands. Skip to [Using it in Google Colab](#using-it-in-google-colab).
+**The dashboard** is the easy way. A web page with dropdowns, no commands to
+type and no files to edit. Start here.
 
-**On your own computer** is faster if you make a lot of maps. See
-[Using it on your computer](#using-it-on-your-computer).
+**Google Colab** if you would rather not install anything at all.
+
+**The command line** if you make a lot of maps and want to script them.
+
+---
+
+## The dashboard
+
+Open a terminal in this folder and run:
+
+```bash
+.venv/Scripts/python.exe -m streamlit run app.py
+```
+
+On a Mac:
+
+```bash
+.venv/bin/python -m streamlit run app.py
+```
+
+Your browser opens at `http://localhost:8501`. If it does not, open that address
+yourself.
+
+Pick the state, district and blocks from the dropdowns. They are built from the
+boundary data itself, so a misspelt name is not something you can produce. Add
+your sites in the little table, press **Make the map**, and the map appears with
+download buttons under it.
+
+The dashboard runs exactly the same checks and the same renderer as the command
+line, so the files it gives you are identical.
 
 ---
 
@@ -221,6 +249,35 @@ The most likely things to change:
 
 The height adjusts itself to suit the shapes being drawn, so a wide state like
 Bihar produces a shorter image than a tall one like Tamil Nadu.
+
+---
+
+## How much of India is covered
+
+All of it. Every one of the 785 districts in 36 states and union territories
+produces a map.
+
+Most of those get all three panels, including the block panel. Seventeen
+districts of Rajasthan created in 2023 — Balotra, Beawar, Phalodi, Sanchor and
+the rest — have a published district boundary but no published block
+boundaries. For those the third panel shows the district on its own and prints
+**"Block boundaries are not published for this district"** under it, so the map
+never implies a detail it does not have.
+
+### A word on how current the data is
+
+The district and block boundaries are a 2023 snapshot. That matters in a few
+places:
+
+- **Rajasthan** shows 50 districts. The state cut back to 41 in January 2025.
+- **Ladakh** shows 2 districts, not the 7 announced in 2024.
+
+No openly licensed boundary dataset reflects those changes yet. The Local
+Government Directory publishes new names and codes promptly, but the polygons
+lag well behind, and Survey of India's own portal needs registration. Where an
+independent count is recorded in `data/lgd/reference_counts.csv`, the tool
+compares against it and warns by name when they disagree — so a stale boundary
+shows up as a warning rather than a quietly wrong map.
 
 ---
 

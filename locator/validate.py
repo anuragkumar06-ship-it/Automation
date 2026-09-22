@@ -107,6 +107,7 @@ class ResolvedTarget:
     target_block_names: list[str]
     sites: list[dict]
     block_level_label: str = "block"
+    blocks_available: bool = True
 
 
 def _load_reference_counts() -> dict[tuple[str, str], dict]:
@@ -204,25 +205,40 @@ def validate_request(
     # ---- Check 3: block layer and block count -------------------------------
     block_frame = data_module.blocks_of(district_lgd)
     block_level_label = "block"
-    if block_frame.empty:
-        report.error(
-            "block layer",
-            f"No community development blocks are available for {district_display}. "
-            f"The third panel cannot be drawn. Either map this district at district "
-            f"level only, or add a block layer for {state_display} and record it in "
-            f"data/SOURCES.md.",
-        )
-        return report, None
+    blocks_available = not block_frame.empty
 
-    _check_count(
-        report=report,
-        references=references,
-        aliases=aliases,
-        level="block",
-        parent=district_display,
-        observed_names=sorted(display(n) for n in block_frame["name"]),
-        what=f"blocks in {district_display}",
-    )
+    if not blocks_available:
+        # Some recently created districts have a district boundary published but
+        # no block boundaries yet. Refusing outright would make those districts
+        # unmappable, so the third panel shows the district on its own and says
+        # so on the map. Asking to highlight a named block is still an error:
+        # there is no polygon to highlight.
+        if blocks:
+            report.error(
+                "block layer",
+                f"No community development blocks are published for {district_display}, "
+                f"so {', '.join(blocks)} cannot be highlighted. Clear the block "
+                f"selection to map this district at district level instead.",
+            )
+            return report, None
+
+        report.info(
+            "block layer",
+            f"No community development blocks are published for {district_display}. "
+            f"The third panel shows the district on its own and says so on the map. "
+            f"This affects districts created after the block layer was last updated.",
+        )
+
+    if blocks_available:
+        _check_count(
+            report=report,
+            references=references,
+            aliases=aliases,
+            level="block",
+            parent=district_display,
+            observed_names=sorted(display(n) for n in block_frame["name"]),
+            what=f"blocks in {district_display}",
+        )
 
     # ---- Check 3b: the named target blocks exist ----------------------------
     target_block_names: list[str] = []
@@ -256,8 +272,9 @@ def validate_request(
 
     # ---- Check 5: geometry validity and coverage ----------------------------
     _check_geometry(report, districts, f"districts of {state_display}")
-    _check_geometry(report, block_frame, f"blocks of {district_display}")
-    _check_coverage(report, district_row, block_frame, district_display)
+    if blocks_available:
+        _check_geometry(report, block_frame, f"blocks of {district_display}")
+        _check_coverage(report, district_row, block_frame, district_display)
 
     if report.errors:
         return report, None
@@ -274,6 +291,7 @@ def validate_request(
         target_block_names=target_block_names,
         sites=resolved_sites,
         block_level_label=block_level_label,
+        blocks_available=blocks_available,
     )
 
 
@@ -349,10 +367,13 @@ def _check_sites(*, report, sites, district_row, district_display, block_frame, 
         report.info("sites", "No site points given.")
         return []
 
-    # Work in a metre-based CRS so distances mean something.
-    metric = block_frame.estimate_utm_crs()
-    blocks_m = block_frame.to_crs(metric)
-    district_m = gpd.GeoSeries([district_row["geometry"]], crs=block_frame.crs).to_crs(metric).iloc[0]
+    # Work in a metre-based CRS so distances mean something. When no block
+    # layer exists the district itself defines the projection.
+    district_series = gpd.GeoSeries([district_row["geometry"]], crs=block_frame.crs)
+    have_blocks = not block_frame.empty
+    metric = block_frame.estimate_utm_crs() if have_blocks else district_series.estimate_utm_crs()
+    blocks_m = block_frame.to_crs(metric) if have_blocks else block_frame
+    district_m = district_series.to_crs(metric).iloc[0]
 
     stated_keys = {name_key(b) for b in stated_blocks}
     resolved = []
@@ -386,10 +407,18 @@ def _check_sites(*, report, sites, district_row, district_display, block_frame, 
             )
             continue
 
-        hit = blocks_m[blocks_m.geometry.contains(point_m)]
-        actual_block = display(hit.iloc[0]["name"]) if len(hit) else None
+        actual_block = None
+        if have_blocks:
+            hit = blocks_m[blocks_m.geometry.contains(point_m)]
+            actual_block = display(hit.iloc[0]["name"]) if len(hit) else None
 
-        if actual_block is None:
+        if not have_blocks:
+            report.info(
+                "site location",
+                f"{name} is inside {district_display} district. There is no block "
+                f"layer for this district, so no block can be named.",
+            )
+        elif actual_block is None:
             report.warning(
                 "site location",
                 f"{name} is inside {district_display} district but not inside any "

@@ -138,10 +138,25 @@ Kadakinaru, Mathur) exist in this layer.
    If Cognizant Foundation needs a first-party download for a published map,
    obtain it manually — see "Manual download route" below.
 
-2. **Vintage is December 2023.** Districts and blocks created after that date
-   will be missing. The validation step counts districts and blocks against the
-   LGD register and reports any mismatch by name, so this surfaces as a warning
-   rather than a silent error.
+2. **Vintage is December 2023.** The GeoParquet assets carry a March 2026
+   upload date, but that is a re-encoding of the same 2023 snapshot, not fresher
+   data. The Rajasthan district count proves it: the layer holds 50 districts,
+   the count from the 2023 reorganisation, where the state has held 41 since
+   January 2025. Ladakh likewise holds 2 districts rather than the 7 announced
+   in 2024.
+
+   Bharatlas, which advertises a 2024 LGD snapshot, was checked on 2026-09-22
+   and carries the same 785 districts. No openly licensed dataset found so far
+   reflects the newer reorganisations.
+
+   Where a reference count is recorded, validation reports the mismatch by name,
+   so a stale boundary surfaces as a warning rather than a silent error.
+
+   **Seventeen Rajasthan districts created in 2023** (Balotra, Beawar, Phalodi,
+   Sanchor, Salumbar, Shahpura, Jodhpur Gramin, Kekri, Didwana Kuchaman, Dudu,
+   Anoopgarh, Neem Ka Thana and others) have a district polygon but no block
+   polygons. Those render as a district-only third panel that says so on the
+   map.
 
 3. **Block coverage varies by state.** Where a state has no CD block layer, the
    tool must fall back to sub-district/taluk and label the panel accordingly.

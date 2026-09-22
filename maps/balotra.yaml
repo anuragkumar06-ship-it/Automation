@@ -1,0 +1,8 @@
+# A district created in 2023. It has a district boundary but no block
+# boundaries yet, so the third panel shows the district on its own.
+state: Rajasthan
+district: Balotra
+blocks: []
+sites: []
+title: null
+output_name: balotra_locator

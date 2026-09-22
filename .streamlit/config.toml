@@ -1,0 +1,12 @@
+# Cognizant Foundation colours, so the dashboard matches the maps it makes.
+[theme]
+primaryColor = "#05819B"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F4F4F2"
+textColor = "#000048"
+
+[browser]
+gatherUsageStats = false
+
+[server]
+headless = true

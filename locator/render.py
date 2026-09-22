@@ -100,6 +100,8 @@ class Panel:
     sites: list[dict] = field(default_factory=list)
     ax: object = None
     labels_skipped: int = 0
+    footnote: str | None = None
+    outline_only: bool = False
 
     @property
     def aspect(self) -> float:
@@ -251,23 +253,52 @@ def _prepare_panels(target, brand: Brand) -> list[Panel]:
         context=_neighbours_of(target, state_crs),
     )
 
-    blocks = target.blocks.copy()
-    district_crs = local_crs(blocks)
-    blocks = blocks.to_crs(district_crs)
-    blocks["geometry"] = blocks.geometry.simplify(SIMPLIFY_DISTRICT_M, preserve_topology=True)
-    blocks = _repair(blocks)
+    if target.blocks_available:
+        blocks = target.blocks.copy()
+        district_crs = local_crs(blocks)
+        blocks = blocks.to_crs(district_crs)
+        blocks["geometry"] = blocks.geometry.simplify(SIMPLIFY_DISTRICT_M, preserve_topology=True)
+        blocks = _repair(blocks)
 
-    mask = blocks["name"].isin(target.target_block_names)
-    district = Panel(
-        kind="district",
-        caption=f"{target.district_name} district",
-        frame=blocks,
-        crs=district_crs,
-        highlight_mask=mask,
-        highlight_colours=brand.highlight_colours(int(mask.sum())),
-        extent=_extent(blocks.total_bounds),
-        sites=target.sites,
-    )
+        mask = blocks["name"].isin(target.target_block_names)
+        district = Panel(
+            kind="district",
+            caption=f"{target.district_name} district",
+            frame=blocks,
+            crs=district_crs,
+            highlight_mask=mask,
+            highlight_colours=brand.highlight_colours(int(mask.sum())),
+            extent=_extent(blocks.total_bounds),
+            sites=target.sites,
+        )
+    else:
+        # No block layer for this district. Rather than refuse to draw, the
+        # third panel shows the district on its own, outlined in the accent, and
+        # says on the map that block boundaries are not published. Districts
+        # created after the block layer was last updated land here.
+        outline = gpd.GeoDataFrame(
+            {"name": [target.district_name], "geometry": [target.district_row["geometry"]]},
+            crs=target.districts.crs,
+        )
+        district_crs = local_crs(outline)
+        outline = outline.to_crs(district_crs)
+        outline["geometry"] = outline.geometry.simplify(
+            SIMPLIFY_DISTRICT_M, preserve_topology=True
+        )
+        outline = _repair(outline)
+
+        district = Panel(
+            kind="district",
+            caption=f"{target.district_name} district",
+            frame=outline,
+            crs=district_crs,
+            highlight_mask=outline["name"].isin([]),
+            highlight_colours=[brand.highlight],
+            extent=_extent(outline.total_bounds),
+            sites=target.sites,
+            footnote="Block boundaries are not published for this district.",
+            outline_only=True,
+        )
 
     return [india, state, district]
 
@@ -356,6 +387,15 @@ def _draw_panel(panel: Panel, brand: Brand) -> None:
             zorder=1,
         )
 
+    if panel.outline_only:
+        panel.frame.plot(
+            ax=ax,
+            facecolor="none",
+            edgecolor=brand.highlight,
+            linewidth=1.6,
+            zorder=3,
+        )
+
     targets = panel.frame[panel.highlight_mask]
     for position, (_, row) in enumerate(targets.iterrows()):
         colour = panel.highlight_colours[position % len(panel.highlight_colours)]
@@ -385,7 +425,7 @@ def _draw_panel(panel: Panel, brand: Brand) -> None:
 
     _label_units(panel, brand, extra_texts=site_texts, objects=obstacles, avoid_points=site_points)
 
-    _caption_panel(ax, panel.caption, brand)
+    _caption_panel(ax, panel.caption, brand, footnote=panel.footnote)
     _add_north_arrow(ax, brand)
     _add_scale_bar(ax, brand)
 
@@ -400,7 +440,7 @@ def _frame_panel(ax, brand: Brand) -> None:
         spine.set_edgecolor(brand.panel_edge)
 
 
-def _caption_panel(ax, caption: str, brand: Brand) -> None:
+def _caption_panel(ax, caption: str, brand: Brand, *, footnote: str | None = None) -> None:
     """Panel name above the frame, with a short rule under it."""
     ax.text(
         0.0,
@@ -422,6 +462,19 @@ def _caption_panel(ax, caption: str, brand: Brand) -> None:
         clip_on=False,
         zorder=12,
     )
+    if footnote:
+        ax.text(
+            0.0,
+            -0.035,
+            footnote,
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            fontsize=brand.size("scale_bar"),
+            color=brand.text_muted,
+            style="italic",
+            clip_on=False,
+        )
 
 
 # --------------------------------------------------------------------------
@@ -795,6 +848,21 @@ def _draw_callout(figure, panel_from: Panel, panel_to: Panel, brand: Brand) -> N
 def _draw_legend(figure, panel: Panel, brand: Brand, *, target) -> None:
     """Legend under the district panel, so it never sits on top of the map."""
     handles = []
+    if panel.outline_only:
+        handles.append(
+            Line2D(
+                [],
+                [],
+                marker="s",
+                linestyle="none",
+                markerfacecolor="none",
+                markeredgecolor=brand.highlight,
+                markeredgewidth=1.4,
+                color="none",
+                markersize=6,
+                label=f"{target.district_name} district",
+            )
+        )
     for name, colour in zip(target.target_block_names, panel.highlight_colours):
         handles.append(
             Line2D(
@@ -807,17 +875,18 @@ def _draw_legend(figure, panel: Panel, brand: Brand, *, target) -> None:
                 label=f"{display(name)} block",
             )
         )
-    handles.append(
-        Line2D(
-            [],
-            [],
-            marker="s",
-            linestyle="none",
-            color=brand.unit_fill,
-            markersize=6,
-            label="Other blocks",
+    if not panel.outline_only:
+        handles.append(
+            Line2D(
+                [],
+                [],
+                marker="s",
+                linestyle="none",
+                color=brand.unit_fill,
+                markersize=6,
+                label="Other blocks",
+            )
         )
-    )
 
     seen = set()
     for site in panel.sites:
@@ -838,10 +907,13 @@ def _draw_legend(figure, panel: Panel, brand: Brand, *, target) -> None:
         )
 
     box = panel.ax.get_position()
+    # A footnote under the panel takes the first line below it, so the legend
+    # drops to the next one.
+    drop = 0.058 if panel.footnote else 0.022
     legend = figure.legend(
         handles=handles,
         loc="upper left",
-        bbox_to_anchor=(box.x0, box.y0 - 0.022),
+        bbox_to_anchor=(box.x0, box.y0 - drop),
         frameon=False,
         fontsize=brand.size("legend"),
         handletextpad=0.6,
