@@ -108,6 +108,8 @@ class ResolvedTarget:
     sites: list[dict]
     block_level_label: str = "block"
     blocks_available: bool = True
+    unit_level: str = "block"        # "block", "tehsil" or "none"
+    unit_coverage: float = 1.0       # share of the district the units cover
 
 
 def _load_reference_counts() -> dict[tuple[str, str], dict]:
@@ -205,7 +207,37 @@ def validate_request(
     # ---- Check 3: block layer and block count -------------------------------
     block_frame = data_module.blocks_of(district_lgd)
     block_level_label = "block"
+    unit_level = "block"
+    unit_coverage = 1.0
     blocks_available = not block_frame.empty
+
+    if not blocks_available:
+        # Fall back to sub-districts before giving up on the third panel. They
+        # are never called blocks: a tehsil is a different unit and the map
+        # says so.
+        tehsils, coverage = data_module.subdistricts_within(district_row["geometry"])
+        if not tehsils.empty:
+            block_frame = tehsils
+            block_level_label = "tehsil"
+            unit_level = "tehsil"
+            unit_coverage = coverage
+            blocks_available = True
+
+            report.info(
+                "block layer",
+                f"No community development blocks are published for {district_display}, "
+                f"so the third panel shows its {len(tehsils)} tehsils instead. These are "
+                f"sub-districts, not blocks, and the map says so.",
+            )
+            note = (
+                f"The tehsils are selected by which ones fall inside {district_display}, "
+                f"because the sub-district register still files them under the district "
+                f"this one was carved out of. They cover {coverage * 100:.1f}% of it."
+            )
+            if coverage < 0.95:
+                report.warning("tehsil coverage", note)
+            else:
+                report.info("tehsil coverage", note)
 
     if not blocks_available:
         # Some recently created districts have a district boundary published but
@@ -229,7 +261,7 @@ def validate_request(
             f"This affects districts created after the block layer was last updated.",
         )
 
-    if blocks_available:
+    if unit_level == "block":
         _check_count(
             report=report,
             references=references,
@@ -268,12 +300,14 @@ def validate_request(
         district_display=district_display,
         block_frame=block_frame,
         stated_blocks=target_block_names,
+        unit_label=block_level_label,
     )
 
     # ---- Check 5: geometry validity and coverage ----------------------------
     _check_geometry(report, districts, f"districts of {state_display}")
     if blocks_available:
-        _check_geometry(report, block_frame, f"blocks of {district_display}")
+        _check_geometry(report, block_frame, f"{block_level_label}s of {district_display}")
+    if unit_level == "block":
         _check_coverage(report, district_row, block_frame, district_display)
 
     if report.errors:
@@ -292,6 +326,8 @@ def validate_request(
         sites=resolved_sites,
         block_level_label=block_level_label,
         blocks_available=blocks_available,
+        unit_level=unit_level,
+        unit_coverage=unit_coverage,
     )
 
 
@@ -361,7 +397,9 @@ def _check_count(*, report, references, aliases, level, parent, observed_names, 
     report.info(f"{level} count", f"{_sentence(what)}: {observed}, matching {source}.")
 
 
-def _check_sites(*, report, sites, district_row, district_display, block_frame, stated_blocks):
+def _check_sites(
+    *, report, sites, district_row, district_display, block_frame, stated_blocks, unit_label="block"
+):
     """Confirm each site falls inside the district and report its actual block."""
     if not sites:
         report.info("sites", "No site points given.")
@@ -415,25 +453,28 @@ def _check_sites(*, report, sites, district_row, district_display, block_frame, 
         if not have_blocks:
             report.info(
                 "site location",
-                f"{name} is inside {district_display} district. There is no block "
-                f"layer for this district, so no block can be named.",
+                f"{name} is inside {district_display} district. There is no "
+                f"{unit_label} layer for this district, so no {unit_label} can be named.",
             )
         elif actual_block is None:
             report.warning(
                 "site location",
                 f"{name} is inside {district_display} district but not inside any "
-                f"block polygon. It may sit in a municipal area the block layer excludes.",
+                f"{unit_label} polygon. It may sit in a municipal area the "
+                f"{unit_label} layer excludes.",
             )
         elif stated_keys and name_key(actual_block) not in stated_keys:
             stated_list = ", ".join(display(b) for b in stated_blocks)
             report.warning(
                 "site location",
-                f"{name} falls in {actual_block} block, not {stated_list}. "
+                f"{name} falls in {actual_block} {unit_label}, not {stated_list}. "
                 f"Either highlight {actual_block} instead, or keep the current "
                 f"highlight if the site serves {stated_list}.",
             )
         else:
-            report.info("site location", f"{name} falls in {actual_block} block, as stated.")
+            report.info(
+                "site location", f"{name} falls in {actual_block} {unit_label}, as stated."
+            )
 
         entry = dict(site)
         entry["actual_block"] = actual_block

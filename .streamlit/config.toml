@@ -1,9 +1,11 @@
-# Cognizant Foundation colours, so the dashboard matches the maps it makes.
+# Cognizant Foundation India palette, from the brand visual identity guidelines
+# (January 2025) and the CF communication guidelines (September 2024).
 [theme]
-primaryColor = "#05819B"
+primaryColor = "#05819B"             # dark teal, Pantone 2221 C
 backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#F4F4F2"
-textColor = "#000048"
+secondaryBackgroundColor = "#F7F7F6"
+textColor = "#000048"                # midnight blue, used instead of black
+font = "sans serif"
 
 [browser]
 gatherUsageStats = false

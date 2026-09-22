@@ -102,6 +102,7 @@ class Panel:
     labels_skipped: int = 0
     footnote: str | None = None
     outline_only: bool = False
+    unit_label: str = "block"
 
     @property
     def aspect(self) -> float:
@@ -157,8 +158,18 @@ def render_map(*, target, config: dict, brand: Brand, report, output_dir: Path) 
     _draw_callout(figure, panels[1], panels[2], brand)
 
     title = config.get("title") or f"{target.district_name} district, {target.state_name}"
-    _draw_title_block(figure, title, brand, margin=margin, width=width, height=height)
+    # The rule stops short of the logo rather than running under it, which the
+    # brand guide treats as competing with the logo for attention.
+    rule_right = width - margin
+    if brand.show_logo and brand.logo_position.startswith("top") and brand.logo_position.endswith("right"):
+        rule_right = width - margin - brand.logo_width_in - brand.logo_clear_space_in
+    _draw_title_block(
+        figure, title, brand, margin=margin, width=width, height=height, rule_right=rule_right
+    )
     _draw_legend(figure, panels[2], brand, target=target)
+
+    if brand.show_logo:
+        _draw_logo(figure, brand, margin=margin, width=width, height=height)
 
     source_line = _source_line()
     figure.text(
@@ -253,6 +264,8 @@ def _prepare_panels(target, brand: Brand) -> list[Panel]:
         context=_neighbours_of(target, state_crs),
     )
 
+    unit_label = target.block_level_label
+
     if target.blocks_available:
         blocks = target.blocks.copy()
         district_crs = local_crs(blocks)
@@ -270,6 +283,16 @@ def _prepare_panels(target, brand: Brand) -> list[Panel]:
             highlight_colours=brand.highlight_colours(int(mask.sum())),
             extent=_extent(blocks.total_bounds),
             sites=target.sites,
+            unit_label=unit_label,
+            footnote=(
+                None
+                if target.unit_level == "block"
+                else (
+                    "Sub-districts (tehsils) shown: block boundaries are not "
+                    f"published for this district. They cover "
+                    f"{target.unit_coverage * 100:.0f}% of it."
+                )
+            ),
         )
     else:
         # No block layer for this district. Rather than refuse to draw, the
@@ -298,6 +321,7 @@ def _prepare_panels(target, brand: Brand) -> list[Panel]:
             sites=target.sites,
             footnote="Block boundaries are not published for this district.",
             outline_only=True,
+            unit_label=unit_label,
         )
 
     return [india, state, district]
@@ -760,7 +784,9 @@ def _nice_distance(raw_km: float) -> float:
     return 10 * magnitude
 
 
-def _draw_title_block(figure, title: str, brand: Brand, *, margin, width, height) -> None:
+def _draw_title_block(
+    figure, title: str, brand: Brand, *, margin, width, height, rule_right=None
+) -> None:
     """The running title, with a rule under it across the page."""
     figure.text(
         margin / width,
@@ -773,9 +799,10 @@ def _draw_title_block(figure, title: str, brand: Brand, *, margin, width, height
         fontweight="bold",
     )
     rule_y = 1 - 0.48 / height
+    right = (rule_right if rule_right is not None else width - margin) / width
     figure.add_artist(
         Line2D(
-            [margin / width, 1 - margin / width],
+            [margin / width, right],
             [rule_y, rule_y],
             transform=figure.transFigure,
             color=brand.rule,
@@ -783,6 +810,46 @@ def _draw_title_block(figure, title: str, brand: Brand, *, margin, width, height
             solid_capstyle="butt",
         )
     )
+
+
+def _draw_logo(figure, brand: Brand, *, margin, width, height) -> None:
+    """Place the Cognizant Foundation India logo in a corner of the page.
+
+    The communication guidelines are specific: the logo sits in a corner and is
+    never centred, and it is never recoloured, stretched or rotated. The aspect
+    ratio comes from the file itself, so the drawn logo cannot be distorted, and
+    the width is floored at the brand minimum by :class:`Brand`.
+    """
+    import matplotlib.image as mpimg
+
+    path = Path(brand.logo_file)
+    if not path.is_absolute():
+        path = Path(__file__).resolve().parent.parent / path
+    if not path.exists():
+        return
+
+    image = mpimg.imread(path)
+    logo_w = brand.logo_width_in
+    logo_h = logo_w * image.shape[0] / image.shape[1]
+
+    clear = brand.logo_clear_space_in
+    position = brand.logo_position
+    left = margin if position.endswith("left") else width - margin - logo_w
+    bottom = (
+        height - margin - logo_h + 0.06 if position.startswith("top") else margin - 0.06
+    )
+
+    # Keep the logo clear of the page edge by at least its required clear space.
+    left = min(max(left, clear), width - logo_w - clear)
+    bottom = min(max(bottom, clear), height - logo_h - clear)
+
+    axes = figure.add_axes(
+        [left / width, bottom / height, logo_w / width, logo_h / height],
+        zorder=30,
+    )
+    axes.imshow(image, interpolation="antialiased")
+    axes.set_axis_off()
+    axes.patch.set_alpha(0)
 
 
 def _draw_callout(figure, panel_from: Panel, panel_to: Panel, brand: Brand) -> None:
@@ -872,7 +939,7 @@ def _draw_legend(figure, panel: Panel, brand: Brand, *, target) -> None:
                 linestyle="none",
                 color=colour,
                 markersize=6,
-                label=f"{display(name)} block",
+                label=f"{display(name)} {panel.unit_label}",
             )
         )
     if not panel.outline_only:
@@ -884,7 +951,7 @@ def _draw_legend(figure, panel: Panel, brand: Brand, *, target) -> None:
                 linestyle="none",
                 color=brand.unit_fill,
                 markersize=6,
-                label="Other blocks",
+                label=f"Other {panel.unit_label}s",
             )
         )
 

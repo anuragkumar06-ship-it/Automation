@@ -83,6 +83,15 @@ DATASETS: dict[str, Dataset] = {
         licence="CC0 1.0 (attribute LGD and datameet)",
         approx_mb=33,
     ),
+    "subdistricts": Dataset(
+        key="subdistricts",
+        filename="LGD_Subdistricts.parquet",
+        release_tag="subdistricts",
+        description="Sub-district (tehsil / taluk) boundaries with LGD codes",
+        origin="LGD / BharatMaps, via ramSeraph/indian_admin_boundaries",
+        licence="CC0 1.0 (attribute LGD and datameet)",
+        approx_mb=95,
+    ),
     "blocks": Dataset(
         key="blocks",
         filename="LGD_Blocks.parquet",
@@ -231,6 +240,73 @@ def load_blocks() -> gpd.GeoDataFrame:
     out["district_key"] = out["district"].map(name_key)
     out["state_key"] = out["state"].map(name_key)
     return out
+
+
+@lru_cache(maxsize=1)
+def load_subdistricts() -> gpd.GeoDataFrame:
+    """Return all sub-districts (tehsils / taluks), normalised.
+
+    Only loaded when a district has no block layer, because the file is large
+    and most districts never need it.
+
+    Columns: ``name``, ``name_key``, ``lgd``, ``district``, ``district_lgd``,
+    ``state``, ``state_key``, ``geometry``.
+    """
+    frame = _read("subdistricts")
+    out = gpd.GeoDataFrame(
+        {
+            "name": frame["sdtname"].astype(str).str.strip(),
+            "lgd": frame["subdt_lgd"],
+            "district": frame["dtname"].astype(str).str.strip(),
+            "district_lgd": frame["dist_lgd"],
+            "state": frame["stname"].astype(str).str.strip(),
+            "geometry": frame.geometry,
+        },
+        crs=frame.crs,
+    )
+    out["name_key"] = out["name"].map(name_key)
+    out["district_key"] = out["district"].map(name_key)
+    out["state_key"] = out["state"].map(name_key)
+    return out
+
+
+def subdistricts_within(district_geometry, *, min_overlap: float = 0.5):
+    """Return the sub-districts that lie inside ``district_geometry``.
+
+    Selected by where they actually are, not by the district code they carry.
+    A district created after the sub-district register was last published has
+    no sub-districts filed under it, but the tehsils that now make it up do
+    exist, filed under the district it was carved out of. Picking them up by
+    location recovers them without inventing anything: every polygon returned
+    is a published one.
+
+    A sub-district is kept when more than ``min_overlap`` of its area falls
+    inside the district. Returns the selection and the fraction of the
+    district those pieces cover, which the caller reports to the user.
+    """
+    subdistricts = load_subdistricts()
+    candidates = subdistricts.iloc[
+        subdistricts.sindex.query(district_geometry, predicate="intersects")
+    ].copy()
+    if candidates.empty:
+        return candidates, 0.0
+
+    metric = candidates.estimate_utm_crs()
+    candidates_m = candidates.to_crs(metric)
+    district_m = (
+        gpd.GeoSeries([district_geometry], crs=subdistricts.crs).to_crs(metric).iloc[0]
+    )
+
+    overlap = candidates_m.geometry.intersection(district_m).area
+    own_area = candidates_m.geometry.area
+    share = overlap / own_area.where(own_area > 0)
+
+    keep = candidates[(share > min_overlap).to_numpy()]
+    if keep.empty or district_m.area <= 0:
+        return keep, 0.0
+
+    covered = keep.to_crs(metric).geometry.intersection(district_m).area.sum()
+    return keep, float(covered / district_m.area)
 
 
 def districts_of(state_lgd) -> gpd.GeoDataFrame:

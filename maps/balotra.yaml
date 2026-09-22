@@ -1,8 +1,8 @@
-# A district created in 2023. It has a district boundary but no block
-# boundaries yet, so the third panel shows the district on its own.
+# A district created in 2023. It has no published block boundaries, so the
+# third panel falls back to the tehsils that fall inside it.
 state: Rajasthan
 district: Balotra
-blocks: []
+blocks: [Pachpadra]
 sites: []
 title: null
 output_name: balotra_locator

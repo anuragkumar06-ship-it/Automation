@@ -144,3 +144,61 @@ class TestBhagalpurCase:
         assert report.errors == []
         assert report.warnings == []
         assert len(target.blocks) == 16
+
+
+class TestTehsilFallback:
+    """Districts created after the block register was last published.
+
+    Seventeen Rajasthan districts have a district boundary but no blocks. The
+    tehsils that make them up do exist, filed under the district each was
+    carved out of, so they are picked up by location instead of by code.
+    """
+
+    def test_a_district_without_blocks_still_produces_a_map(self, aliases):
+        report, target = validate_request(
+            state="Rajasthan", district="Balotra", blocks=[], sites=[], aliases=aliases
+        )
+        assert report.errors == []
+        assert target is not None
+
+    def test_it_falls_back_to_tehsils_not_blocks(self, aliases):
+        _, target = validate_request(
+            state="Rajasthan", district="Balotra", blocks=[], sites=[], aliases=aliases
+        )
+        assert target.unit_level == "tehsil"
+        assert target.block_level_label == "tehsil"
+        assert len(target.blocks) > 0
+
+    def test_the_tehsils_cover_the_district(self, aliases):
+        _, target = validate_request(
+            state="Rajasthan", district="Balotra", blocks=[], sites=[], aliases=aliases
+        )
+        assert target.unit_coverage > 0.9
+
+    def test_a_named_tehsil_can_be_highlighted(self, aliases):
+        report, target = validate_request(
+            state="Rajasthan",
+            district="Balotra",
+            blocks=["Pachpadra"],
+            sites=[],
+            aliases=aliases,
+        )
+        assert report.errors == []
+        assert target.target_block_names == ["Pachpadra"]
+
+    def test_a_name_that_is_not_a_tehsil_is_rejected(self, aliases):
+        report, target = validate_request(
+            state="Rajasthan",
+            district="Balotra",
+            blocks=["Nowhere"],
+            sites=[],
+            aliases=aliases,
+        )
+        assert report.errors
+        assert target is None
+
+    def test_districts_with_blocks_are_unaffected(self, aliases):
+        _, target = validate_request(
+            state="Tamil Nadu", district="Madurai", blocks=[], sites=[], aliases=aliases
+        )
+        assert target.unit_level == "block"

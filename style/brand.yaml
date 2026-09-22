@@ -8,21 +8,29 @@ font:
   family: [Gellix, Arial, Helvetica, DejaVu Sans]
 
 colours:
+  # Base colours. The brand guide is explicit that midnight blue is used for
+  # most text instead of black.
   text: "#000048"            # midnight blue - titles and target labels
-  text_secondary: "#5A5A6E"  # ordinary unit labels, so they sit behind the target
-  text_muted: "#9A9AA6"      # seas, neighbouring states, source line
+  text_secondary: "#53565A"  # dark gray - ordinary unit labels
+  text_muted: "#97999B"      # medium gray - seas, neighbouring states, footnotes
 
-  unit_fill: "#D0D0CE"       # non-target states / districts / blocks
+  # Neutral greys. The guide puts these on "tertiary information such as
+  # footnotes or as backgrounds for charts and graphs", which is what the
+  # non-target units are.
+  unit_fill: "#D0D0CE"       # light gray - non-target states / districts / units
   unit_edge: "#FFFFFF"       # white hairline borders between units
-  context_fill: "#EBEBE9"    # neighbouring states, behind the mapped one
+  context_fill: "#E8E8E6"    # a lighter tint, for neighbouring states behind
 
-  highlight: "#05819B"       # the target unit on each panel
+  # Accent colours. The guide says teal may be used as a general highlight, and
+  # that accents suit "secondary headlines, lines, and graphic elements" - which
+  # is exactly the target unit and the callout box.
+  highlight: "#05819B"       # dark teal, Pantone 2221 C
   highlight_edge: "#03697E"  # a darker rim on the target, so it reads as raised
-  highlight_secondary: "#06C7CC"  # additional target blocks beyond the first
+  highlight_secondary: "#06C7CC"  # medium teal, Pantone 3262 C
 
   water: "#FFFFFF"           # sea and inland water
   background: "#FFFFFF"
-  panel_fill: "#FCFCFB"      # very light panel ground
+  panel_fill: "#FBFBFA"      # very light panel ground
   panel_edge: "#E4E4E0"      # hairline frame around each panel
   rule: "#000048"            # the rule under the title
 
@@ -73,6 +81,20 @@ layout:
   panel_gap_in: 0.62          # space for the lines joining one panel to the next
   margin_in: 0.42
 
+logo:
+  # Cognizant Foundation India logo. Two rules from the communication
+  # guidelines govern this: the logo always sits in a corner and is never
+  # centred, and it is never recoloured, stretched or rotated. The aspect ratio
+  # is taken from the file, so it cannot be distorted here.
+  #
+  # Using the logo needs Cognizant Foundation's approval each time, so this is
+  # off by default. Turn it on once you have that approval.
+  show: true
+  file: assets/cognizant_foundation_india_logo.png
+  position: top-right       # top-right, top-left, bottom-right, bottom-left
+  width_in: 1.45            # brand minimum for print is 0.6875 in
+  clear_space_in: 0.16      # at least the height of the "z" in "cognizant"
+
 rules:
   # Sentence case everywhere, never all caps or title case.
   sentence_case: true
@@ -81,4 +103,4 @@ rules:
   allow_gradients: false
   allow_shadows: false
   allow_dashed_lines: false
-  show_logo: false
+  show_logo: false   # superseded by the logo block above

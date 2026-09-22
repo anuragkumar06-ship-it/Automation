@@ -18,18 +18,21 @@ import pandas as pd
 import streamlit as st
 
 from locator import data as data_module
+from locator import theme
 from locator.cli import run_from_config
 from locator.names import display
-from locator.validate import ERROR, INFO, WARNING
+from locator.validate import INFO
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 SITE_TYPES = ["hospital", "school", "camp"]
 
 st.set_page_config(
-    page_title="Locator map generator",
-    page_icon="🗺️",
+    page_title="Locator map generator | Cognizant Foundation India",
+    page_icon=str(theme.LOGO_PATH) if theme.LOGO_PATH.exists() else "🗺️",
     layout="wide",
 )
+
+st.markdown(theme.css(), unsafe_allow_html=True)
 
 
 # --------------------------------------------------------------------------
@@ -37,10 +40,15 @@ st.set_page_config(
 # --------------------------------------------------------------------------
 
 
+# The sub-district layer is large and only a handful of districts need it, so
+# it is fetched on demand rather than at startup.
+CORE_LAYERS = ("states", "districts", "blocks")
+
+
 @st.cache_resource(show_spinner="Loading boundary data. This happens once.")
 def _boundaries():
-    """Download if needed, then load all three layers."""
-    for key in data_module.DATASETS:
+    """Download if needed, then load the three layers every map uses."""
+    for key in CORE_LAYERS:
         data_module.ensure_dataset(key)
     return (
         data_module.load_states(),
@@ -64,19 +72,40 @@ def _district_options(state_lgd: int) -> list[tuple[str, int]]:
 
 
 @st.cache_data(show_spinner=False)
-def _block_options(district_lgd: int) -> list[str]:
+def _unit_options(district_lgd: int, district_lgd_geom_key: str) -> tuple[list[str], str]:
+    """The units the third panel can highlight, and what they are called.
+
+    Blocks where they exist. Where they do not — a district created after the
+    block register was last published — the tehsils that fall inside the
+    district, which are never called blocks.
+    """
     blocks = data_module.blocks_of(district_lgd)
-    return sorted(display(n) for n in blocks["name"])
+    if not blocks.empty:
+        return sorted(display(n) for n in blocks["name"]), "block"
+
+    districts = data_module.load_districts()
+    row = districts[districts["lgd"].astype("int64") == int(district_lgd)]
+    if row.empty:
+        return [], "block"
+    with st.spinner("Loading sub-district boundaries. This happens once."):
+        tehsils, _ = data_module.subdistricts_within(row.iloc[0]["geometry"])
+    if tehsils.empty:
+        return [], "block"
+    return sorted(display(n) for n in tehsils["name"]), "tehsil"
 
 
 # --------------------------------------------------------------------------
 # page
 # --------------------------------------------------------------------------
 
-st.title("Locator map generator")
-st.caption(
-    "Three-panel maps for Cognizant Foundation proposals. Every boundary comes "
-    "from a published government dataset — nothing is drawn or estimated."
+st.markdown(
+    theme.header_html(
+        "Locator map generator",
+        "Three-panel location maps for Cognizant Foundation India funding proposals. "
+        "Every boundary comes from a published government dataset — nothing is drawn, "
+        "estimated or generated.",
+    ),
+    unsafe_allow_html=True,
 )
 
 try:
@@ -113,19 +142,27 @@ with st.sidebar:
     )
     district_lgd = dict(district_pairs)[district_name]
 
-    block_names = _block_options(district_lgd)
+    block_names, unit_label = _unit_options(district_lgd, district_lgd_geom_key=district_name)
     if block_names:
         default_blocks = [b for b in ("Madurai West",) if b in block_names]
         blocks = st.multiselect(
-            f"Blocks to highlight ({len(block_names)} in this district)",
+            f"{unit_label.capitalize()}s to highlight "
+            f"({len(block_names)} in this district)",
             block_names,
             default=default_blocks,
         )
+        if unit_label == "tehsil":
+            st.markdown(
+                '<div class="cf-caption">Block boundaries are not published for this '
+                "district, so its tehsils are offered instead. The map says so on its "
+                "face.</div>",
+                unsafe_allow_html=True,
+            )
     else:
         blocks = []
         st.warning(
-            f"No community development blocks are available for {district_name}. "
-            f"The third panel cannot be drawn."
+            f"Neither blocks nor tehsils are published for {district_name}. "
+            f"The third panel will show the district on its own."
         )
 
     st.divider()
@@ -269,10 +306,13 @@ elif go:
         output_dir = Path(outcome["output_dir"])
         name = config["output_name"]
 
+        st.markdown(theme.rule_html(), unsafe_allow_html=True)
         st.subheader("Your map")
         preview = output_dir / f"{name}_300dpi.png"
         if preview.exists():
+            st.markdown('<div class="cf-map">', unsafe_allow_html=True)
             st.image(str(preview), use_container_width=True)
+            st.markdown("</div>", unsafe_allow_html=True)
 
         st.subheader("Download")
         wanted = [
@@ -302,24 +342,30 @@ elif go:
                 st.code(log.read_text(encoding="utf-8"), language="text")
 
 else:
-    st.info(
-        "Pick a state, district and block on the left, add your sites, then press "
-        "**Make the map**."
+    st.markdown(
+        '<div class="cf-note">Pick a state, district and block on the left, add your '
+        "sites, then press <b>Make the map</b>.</div>",
+        unsafe_allow_html=True,
     )
+    st.markdown(theme.rule_html(), unsafe_allow_html=True)
+    st.subheader("What gets checked before anything is drawn")
     st.markdown(
         """
-        **What gets checked before anything is drawn**
+- The district and block counts, against an independent register where one is recorded.
+- That each site falls inside the district you picked, and **which block it really falls in**.
+- That the blocks fit together with no gap in the district.
+- That every boundary drawn comes from a published dataset.
 
-        - the district and block counts, against an independent register where one is recorded
-        - that each site falls inside the district you picked, and **which block it really falls in**
-        - that the blocks fit together with no gap in the district
-
-        A problem stops the map and says what is wrong. Nothing is ever guessed or filled in.
+A problem stops the map and says what is wrong. Nothing is ever guessed or filled in.
         """
     )
 
-st.divider()
-st.caption(
-    "Boundaries: Survey of India (states); Local Government Directory via BharatMaps "
-    "(districts and blocks). Sources and licences are recorded in data/SOURCES.md."
+st.markdown(theme.rule_html(), unsafe_allow_html=True)
+st.markdown(
+    '<div class="cf-caption">Boundaries: Survey of India (states); Local Government '
+    "Directory via BharatMaps (districts, blocks and sub-districts). Sources, licences "
+    "and the date each was checked are recorded in <code>data/SOURCES.md</code>.<br>"
+    "Cognizant Foundation India logo used under the communication guidelines: approval "
+    "is required for each use.</div>",
+    unsafe_allow_html=True,
 )

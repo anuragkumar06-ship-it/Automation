@@ -127,9 +127,31 @@ class Brand:
     def marker_size(self) -> float:
         return float(self.raw["markers"]["size"])
 
+    # -- logo --------------------------------------------------------------
+    @property
+    def _logo(self) -> dict:
+        return self.raw.get("logo", {}) or {}
+
     @property
     def show_logo(self) -> bool:
-        return bool(self.raw["rules"]["show_logo"])
+        return bool(self._logo.get("show", False))
+
+    @property
+    def logo_file(self) -> str:
+        return str(self._logo.get("file", ""))
+
+    @property
+    def logo_position(self) -> str:
+        return str(self._logo.get("position", "top-right")).lower()
+
+    @property
+    def logo_width_in(self) -> float:
+        # The brand minimum for the horizontal logo in print is 0.6875 inches.
+        return max(float(self._logo.get("width_in", 1.45)), 0.6875)
+
+    @property
+    def logo_clear_space_in(self) -> float:
+        return float(self._logo.get("clear_space_in", 0.16))
 
     def highlight_colours(self, count: int) -> list[str]:
         """Return ``count`` highlight colours, staying inside one accent group.
