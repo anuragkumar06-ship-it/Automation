@@ -49,6 +49,12 @@ SCALE_BAND = 0.11
 # Breathing room around the mapped area.
 EXTENT_PAD = 0.02
 
+# Fixed bands, in inches, for the running title above the panels and for the
+# legend plus source line below them. Keeping these in inches rather than as a
+# fraction means type stays the same size whatever height the panels come out.
+BAND_TOP_IN = 0.68
+BAND_BOTTOM_IN = 0.72
+
 
 @dataclass
 class RenderResult:
@@ -91,26 +97,29 @@ def render_map(*, target, config: dict, brand: Brand, report, output_dir: Path) 
     panels = _prepare_panels(target, brand)
 
     width = brand.layout("figure_width_in")
-    height = brand.layout("figure_height_in")
+    max_height = brand.layout("figure_height_in")
     margin = brand.layout("margin_in")
     gap = brand.layout("panel_gap_in")
 
-    figure = plt.figure(figsize=(width, height), facecolor=brand.background)
-
-    # Space left for the running title above and the source line below.
-    band_top, band_bottom = 0.865, 0.11
     available_w = width - 2 * margin - 2 * gap
-    available_h = (band_top - band_bottom) * height
+    available_h = max_height - BAND_TOP_IN - BAND_BOTTOM_IN
 
     panel_h, panel_widths = _allocate(
         [p.aspect for p in panels], available_w=available_w, available_h=available_h
     )
 
-    row_bottom = band_bottom * height + (available_h - panel_h) / 2
+    # How tall the three panels turn out depends on how wide their shapes are:
+    # a wide state such as Bihar forces shorter panels than a narrow one such
+    # as Tamil Nadu. The figure is trimmed to fit rather than left with a band
+    # of empty paper, so the image drops into a document at a sensible size.
+    height = panel_h + BAND_TOP_IN + BAND_BOTTOM_IN
+
+    figure = plt.figure(figsize=(width, height), facecolor=brand.background)
+
     cursor = margin
     for panel, panel_w in zip(panels, panel_widths):
         panel.ax = figure.add_axes(
-            [cursor / width, row_bottom / height, panel_w / width, panel_h / height],
+            [cursor / width, BAND_BOTTOM_IN / height, panel_w / width, panel_h / height],
             facecolor=brand.water,
         )
         cursor += panel_w + gap
@@ -127,7 +136,7 @@ def render_map(*, target, config: dict, brand: Brand, report, output_dir: Path) 
     title = config.get("title") or f"{target.district_name} district, {target.state_name}"
     figure.text(
         margin / width,
-        0.955,
+        1 - 0.26 / height,
         title,
         ha="left",
         va="center",
@@ -139,7 +148,7 @@ def render_map(*, target, config: dict, brand: Brand, report, output_dir: Path) 
     source_line = _source_line()
     figure.text(
         margin / width,
-        0.028,
+        0.17 / height,
         source_line,
         ha="left",
         va="center",
@@ -612,7 +621,7 @@ def _add_legend(figure, panel: Panel, brand: Brand, *, target) -> None:
     legend = figure.legend(
         handles=handles,
         loc="upper left",
-        bbox_to_anchor=(box.x0, box.y0 - 0.005),
+        bbox_to_anchor=(box.x0, box.y0 - 0.012),
         frameon=False,
         fontsize=brand.size("legend"),
         handletextpad=0.6,
@@ -635,7 +644,7 @@ def _connect(figure, panel_from: Panel, panel_to: Panel, brand: Brand) -> None:
     patch = ConnectionPatch(
         xyA=(anchor.x, anchor.y),
         coordsA=panel_from.ax.transData,
-        xyB=(-0.06, 0.5),
+        xyB=(-0.025, 0.5),
         coordsB=panel_to.ax.transAxes,
         arrowstyle="-|>",
         mutation_scale=11,

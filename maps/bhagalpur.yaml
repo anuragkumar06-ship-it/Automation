@@ -1,0 +1,17 @@
+# Case 2 from the project brief: Bhagalpur district, Bihar.
+#
+# Block data is available for Bihar, so this is a full three-panel map
+# rather than the district-level fallback.
+
+state: Bihar
+district: Bhagalpur
+blocks: [Sabour]
+
+sites:
+  - name: Bihar Agricultural University, Sabour
+    lat: 25.2372
+    lon: 87.0417
+    type: school
+
+title: null
+output_name: bhagalpur_locator

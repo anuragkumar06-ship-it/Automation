@@ -158,3 +158,40 @@ If a first-party Survey of India file is required:
    "Entire country – District level" or "Entire country – Taluk level".
 4. Save the download into `data/raw/soi_official/` and add an entry to this
    file recording the date, product name and licence terms shown at download.
+
+---
+
+## 5. Reference registers used for validation, not geometry
+
+`data/lgd/reference_counts.csv` holds the counts the boundary layers are checked
+against. It is kept separate from the geometry on purpose: checking an
+LGD-derived layer against LGD numbers taken from that same layer would confirm
+nothing. Each row records where its number came from.
+
+Recorded so far:
+
+| Level | Parent | Count | Source | Checked |
+|---|---|---|---|---|
+| District | Tamil Nadu | 38 | LGD district register, matching the list in the project brief | 2026-09-22 |
+| Block | Madurai | 13 | LGD block list as stated in the project brief | 2026-09-22 |
+| District | Bihar | 38 | Government of Bihar district register | 2026-09-22 |
+| Block | Bhagalpur | 16 | Bhagalpur district administration, https://bhagalpur.nic.in/subdivision-blocks/ | 2026-09-22 |
+
+**States with no row here are not silently accepted.** The validator raises a
+warning saying the count has not been independently checked, which stops the
+render unless `--force` is given. Adding a state means adding a row with a
+citable source.
+
+The Bhagalpur row is a genuine independent check: the names come from the
+district administration's own website and four of them are spelled differently
+there than in the boundary layer (Naugachia/Naugachhia, Rangra Chowk/
+Rangrachowk, Sanhoula/Sonhaula, Pirpainty/Pirpainti). Those differences are
+resolved through `data/aliases.csv`, and the count matched at 16.
+
+## 6. Water body labels
+
+`data/sea_labels.csv` holds the position of each sea or gulf label used on state
+panels. These are **labels only** - no water polygon is drawn from them, and a
+label appears only when its point falls inside the panel being drawn. Positions
+are approximate label anchors, not boundaries, and are not used in any
+measurement or containment test.

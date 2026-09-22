@@ -107,11 +107,12 @@ def _capitalise_word(word: str, *, first: bool) -> str:
     if word == "&":
         return "&"
 
-    # Capitalise either side of a hyphen or slash, and after a full stop so
-    # that "t.kallupatti" reads "T.Kallupatti".
-    parts = re.split(r"([-/.])", lowered)
+    # Capitalise either side of a hyphen, slash or bracket, and after a full
+    # stop, so that "t.kallupatti" reads "T.Kallupatti" and "kaimur (bhabua)"
+    # reads "Kaimur (Bhabua)".
+    parts = re.split(r"([-/.()])", lowered)
     return "".join(
-        part if part in "-/." else (part[:1].upper() + part[1:]) for part in parts
+        part if part in "-/.()" else (part[:1].upper() + part[1:]) for part in parts
     )
 
 

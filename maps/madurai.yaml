@@ -5,7 +5,7 @@
 
 state: Tamil Nadu
 district: Madurai
-blocks: [Madurai East]
+blocks: [Madurai West]   # the block Government Rajaji Hospital actually falls in
 
 sites:
   - name: Government Rajaji Hospital (GRH)
