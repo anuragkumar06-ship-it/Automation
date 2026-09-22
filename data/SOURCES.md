@@ -117,6 +117,35 @@ Kadakinaru, Mathur) exist in this layer.
 
 ---
 
+## 3b. LGD_Subdistricts — tehsil / taluk boundaries, used as a fallback
+
+- **File:** `data/raw/LGD_Subdistricts.parquet` (92 MB, GeoParquet)
+- **Download:** https://github.com/ramSeraph/indian_admin_boundaries/releases/download/subdistricts/LGD_Subdistricts.parquet
+- **Original source:** LGD / BharatMaps —
+  https://mapservice.gov.in/gismapservice/rest/services/BharatMapService/Admin_Boundary_Village/MapServer/2
+- **Licence:** CC0 1.0, attribution as above
+- **Downloaded:** 2026-09-22
+- **Rows:** 6,471
+- **Columns used:** `sdtname`, `subdt_lgd`, `dtname`, `dist_lgd`, `stname`, `state_lgd`
+
+Downloaded on demand, not at startup, because only a handful of districts need
+it.
+
+**Why it is selected by location rather than by code.** The seventeen Rajasthan
+districts created in 2023 have no sub-districts filed under them in this layer,
+exactly as they have no blocks. The tehsils that now make them up do exist —
+filed under the district each was carved out of. So the tool takes every tehsil
+whose area falls more than 50% inside the target district polygon.
+
+This invents nothing: every polygon drawn is a published one, and the district
+polygon defining the selection is published too. What it does do is re-attribute
+published tehsils to a district the register has not caught up with, so the tool
+reports the share of the district those tehsils cover and prints it on the map.
+Verified 2026-09-22 across all seventeen: fourteen at 100%, the others at
+81–98%.
+
+They are labelled tehsils, never blocks.
+
 ## 4. PMGSY_Blocks — cross-check only, not used for rendering
 
 - **File:** `data/raw/PMGSY_Blocks.parquet` (156 MB)

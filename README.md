@@ -234,6 +234,40 @@ it from then on.
 
 ---
 
+## The Cognizant Foundation brand
+
+Colours, type and logo rules follow the Cognizant brand visual identity
+guidelines (January 2025) and the Cognizant Foundation communication guidelines
+(September 2024):
+
+- Midnight blue `#000048` for most text, in place of black
+- Light grey `#D0D0CE` for units that are not the target, which is what the
+  guide means by grey as a background for charts
+- Dark teal `#05819B` for the highlighted unit; the guide allows teal as a
+  general highlight colour
+- Dark grey `#53565A` and medium grey `#97999B` for secondary and tertiary text
+- Gellix where it is installed, Arial everywhere else
+- Sentence case throughout, left-aligned, never all caps
+
+### The logo
+
+The map and the dashboard both carry the Cognizant Foundation India logo in a
+corner, never centred, never recoloured, stretched or rotated. Its aspect ratio
+is read from the image file so it cannot be distorted, and its width is floored
+at the brand print minimum of 0.6875 inches.
+
+**Cognizant Foundation requires approval for each use of the logo.** Because of
+that it is controlled by a single switch in `style/brand.yaml`:
+
+```yaml
+logo:
+  show: true
+```
+
+Set it to `false` for any map that has not been approved.
+
+---
+
 ## Changing how the map looks
 
 All the colours, type sizes and line weights live in one file:
@@ -257,12 +291,18 @@ Bihar produces a shorter image than a tall one like Tamil Nadu.
 All of it. Every one of the 785 districts in 36 states and union territories
 produces a map.
 
-Most of those get all three panels, including the block panel. Seventeen
-districts of Rajasthan created in 2023 — Balotra, Beawar, Phalodi, Sanchor and
-the rest — have a published district boundary but no published block
-boundaries. For those the third panel shows the district on its own and prints
-**"Block boundaries are not published for this district"** under it, so the map
-never implies a detail it does not have.
+Most get all three panels with real blocks. Seventeen districts of Rajasthan
+created in 2023 — Balotra, Beawar, Phalodi, Sanchor and the rest — have a
+published district boundary but no published blocks. For those the tool falls
+back to the **tehsils** that fall inside the district, which do exist in the
+sub-district register, just filed under the district each was carved out of.
+
+Those maps say so on their face: the panel prints *"Sub-districts (tehsils)
+shown: block boundaries are not published for this district"* together with the
+share of the district they cover. A tehsil is never labelled a block.
+
+If neither blocks nor tehsils exist, the third panel shows the district on its
+own and says that too. The map never implies a detail it does not have.
 
 ### A word on how current the data is
 
