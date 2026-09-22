@@ -1,0 +1,64 @@
+# Cognizant Foundation brand settings for locator maps.
+# Every colour and type choice lives here so it can be changed in one place.
+# Colours are hex strings. Sizes are matplotlib points unless noted.
+
+font:
+  # First family that is actually installed wins. Gellix is the Cognizant
+  # brand face; Arial is the fallback the brand guide allows.
+  family: [Gellix, Arial, Helvetica, DejaVu Sans]
+
+colours:
+  text: "#000048"            # midnight blue - all type
+  text_muted: "#6E6E78"      # seas, neighbouring states, source line
+
+  unit_fill: "#D0D0CE"       # non-target states / districts / blocks
+  unit_edge: "#FFFFFF"       # white hairline borders between units
+
+  highlight: "#05819B"       # the target unit on each panel
+  highlight_secondary: "#06C7CC"  # additional target blocks beyond the first
+
+  water: "#FFFFFF"           # sea and inland water
+  background: "#FFFFFF"
+
+  site_marker: "#000048"     # site points
+  connector: "#05819B"       # arrows between panels
+
+line_widths:
+  unit_edge: 0.4
+  highlight_edge: 0.8
+  panel_frame: 0.6
+  connector: 1.4
+  leader_line: 0.4
+
+type_sizes:
+  panel_title: 11
+  unit_label: 6.5
+  target_label: 7.5
+  site_label: 7
+  legend: 7
+  scale_bar: 6.5
+  source_line: 6
+
+markers:
+  hospital: o
+  school: s
+  camp: ^
+  default: o
+  size: 28
+
+layout:
+  # A4 landscape at 300 dpi is the print target.
+  figure_width_in: 11.69
+  figure_height_in: 5.2
+  panel_gap_in: 0.55        # space reserved for connector arrows
+  margin_in: 0.35
+
+rules:
+  # Sentence case everywhere, never all caps or title case.
+  sentence_case: true
+  title_align: left
+  # Hard no on decoration, per the brand guide.
+  allow_gradients: false
+  allow_shadows: false
+  allow_dashed_lines: false
+  show_logo: false

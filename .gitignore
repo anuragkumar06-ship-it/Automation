@@ -1,0 +1,18 @@
+# Rendered maps - regenerate them, do not commit them
+output/
+
+# Large raw downloads. SOURCES.md records how to fetch these again.
+data/raw/
+data/processed/*.gpkg
+data/processed/*.parquet
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# OS
+.DS_Store
+Thumbs.db

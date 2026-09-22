@@ -1,0 +1,12 @@
+# Locator map generator - runtime dependencies
+# All free and open source. No paid API keys anywhere.
+
+geopandas>=1.0,<2.0      # vector data handling
+shapely>=2.0,<3.0        # geometry operations
+pyproj>=3.6              # projections
+pyogrio>=0.8             # fast vector I/O (GeoPackage, shapefile)
+matplotlib>=3.8          # rendering
+adjustText>=1.1          # label collision avoidance
+PyYAML>=6.0              # config and brand files
+pandas>=2.0              # tabular data (LGD registers, aliases)
+requests>=2.31           # downloading open datasets
