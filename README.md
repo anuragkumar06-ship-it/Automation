@@ -263,3 +263,17 @@ data has not been downloaded.
 Two rules hold throughout the codebase: no part of the pipeline calls a language
 model or an image generator, and no boundary is ever drawn, approximated or
 invented. Same input, same data, same picture, every time.
+
+---
+
+## A note on reproducibility
+
+The same config, the same data files and the same day produce a byte-identical
+image. Two things were needed to make that true:
+
+- The label placement library stops after a one-second time limit by default,
+  which makes the result depend on how busy the machine is. This tool pins it to
+  a fixed number of passes instead.
+- The source line carries the date the map was generated, so a map made
+  tomorrow differs from one made today by that line alone. That is deliberate,
+  because the date belongs on the map.

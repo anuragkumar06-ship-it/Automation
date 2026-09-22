@@ -49,6 +49,16 @@ SCALE_BAND = 0.11
 # Breathing room around the mapped area.
 EXTENT_PAD = 0.02
 
+# adjustText stops after a one second time limit unless it is told otherwise,
+# which makes label positions depend on how busy the machine is. Pinning the
+# iteration count instead is what makes two runs produce the same picture.
+LABEL_ITERATIONS = 80
+
+# Neighbouring states are background context, so they are thinned hard before
+# the adjacency test. Comparing full-resolution coastlines against every state
+# is the single most expensive thing this module could do.
+NEIGHBOUR_SIMPLIFY_M = 500
+
 # Fixed bands, in inches, for the running title above the panels and for the
 # legend plus source line below them. Keeping these in inches rather than as a
 # fraction means type stays the same size whatever height the panels come out.
@@ -182,6 +192,7 @@ def render_map(*, target, config: dict, brand: Brand, report, output_dir: Path) 
         + ", ".join(f"{p.kind} {w:.2f}" for p, w in zip(panels, panel_widths))
         + f"; shared height {panel_h:.2f}"
     )
+    notes.append(f"Label layout: {LABEL_ITERATIONS} fixed iterations (not time limited).")
     notes.append(f"Font used: {brand.font_family}.")
 
     return RenderResult(files=files, figure_size=(width, height), notes=notes)
@@ -196,8 +207,9 @@ def _prepare_panels(target, brand: Brand) -> list[Panel]:
     """Reproject, simplify and work out the extent for all three panels."""
     # ---- panel 1: India ---------------------------------------------------
     india_crs = india_lcc()
-    states = _repair(data_module.load_states().to_crs(india_crs))
+    states = data_module.load_states().to_crs(india_crs).copy()
     states["geometry"] = states.geometry.simplify(SIMPLIFY_INDIA_M, preserve_topology=True)
+    states = _repair(states)
     india = Panel(
         kind="india",
         title="India",
@@ -210,10 +222,11 @@ def _prepare_panels(target, brand: Brand) -> list[Panel]:
     )
 
     # ---- panel 2: the state ----------------------------------------------
-    districts = _repair(target.districts.copy())
+    districts = target.districts.copy()
     state_crs = local_crs(districts)
     districts = districts.to_crs(state_crs)
     districts["geometry"] = districts.geometry.simplify(SIMPLIFY_STATE_M, preserve_topology=True)
+    districts = _repair(districts)
 
     neighbours = _neighbours_of(target, state_crs)
     state = Panel(
@@ -230,10 +243,11 @@ def _prepare_panels(target, brand: Brand) -> list[Panel]:
     )
 
     # ---- panel 3: the district -------------------------------------------
-    blocks = _repair(target.blocks.copy())
+    blocks = target.blocks.copy()
     district_crs = local_crs(blocks)
     blocks = blocks.to_crs(district_crs)
     blocks["geometry"] = blocks.geometry.simplify(SIMPLIFY_DISTRICT_M, preserve_topology=True)
+    blocks = _repair(blocks)
 
     mask = blocks["name"].isin(target.target_block_names)
     district = Panel(
@@ -272,16 +286,26 @@ def _allocate(aspects: list[float], *, available_w: float, available_h: float):
 
 
 def _neighbours_of(target, crs) -> gpd.GeoDataFrame | None:
-    """The states touching the target state, drawn faintly for orientation."""
-    states = _repair(data_module.load_states().to_crs(crs))
+    """The states touching the target state, drawn faintly for orientation.
+
+    Thinned and looked up through the spatial index rather than by measuring
+    the exact distance from every state, which on full-resolution coastlines
+    takes about a minute.
+    """
+    states = data_module.load_states().to_crs(crs).copy()
+    states["geometry"] = states.geometry.simplify(NEIGHBOUR_SIMPLIFY_M, preserve_topology=True)
+    states = _repair(states)
+
     match = states.loc[states["name_key"] == target.state_key, "geometry"]
     if match.empty:
         return None
-    target_geom = match.iloc[0]
-    neighbours = states[
-        (states["name_key"] != target.state_key)
-        & (~states["disputed"])
-        & (states.geometry.distance(target_geom) < 1500)
+
+    # A small buffer catches states that share a border without their
+    # simplified outlines quite meeting.
+    probe = match.iloc[0].buffer(NEIGHBOUR_SIMPLIFY_M * 4)
+    nearby = states.iloc[states.sindex.query(probe, predicate="intersects")]
+    neighbours = nearby[
+        (nearby["name_key"] != target.state_key) & (~nearby["disputed"])
     ]
     return neighbours if len(neighbours) else None
 
@@ -331,12 +355,22 @@ def _draw_panel(panel: Panel, brand: Brand) -> None:
     ax.set_aspect("equal")
     ax.set_axis_off()
 
-    site_texts = _draw_sites(panel, brand)
-    _label_units(panel, brand, extra_texts=site_texts)
-
+    # Everything the unit labels must not collide with is drawn first, then
+    # handed to the label pass as fixed obstacles.
+    obstacles = []
     if panel.kind == "state":
-        _label_context(panel, brand)
-        _label_water(panel, brand)
+        obstacles += _label_context(panel, brand)
+        obstacles += _label_water(panel, brand)
+
+    site_texts, site_points = _draw_sites(panel, brand)
+
+    _label_units(
+        panel,
+        brand,
+        extra_texts=site_texts,
+        objects=obstacles,
+        avoid_points=site_points,
+    )
 
     ax.set_title(
         panel.title,
@@ -362,7 +396,9 @@ def _repair(frame: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     return frame
 
 
-def _label_units(panel: Panel, brand: Brand, *, extra_texts=None) -> None:
+def _label_units(
+    panel: Panel, brand: Brand, *, extra_texts=None, objects=None, avoid_points=None
+) -> None:
     """Place one label per unit, nudged apart and joined by leader lines."""
     from adjustText import adjust_text
 
@@ -390,12 +426,22 @@ def _label_units(panel: Panel, brand: Brand, *, extra_texts=None) -> None:
     if not texts:
         return
 
+    # Site markers are repelled from as bare coordinates. Passing the scatter
+    # artists themselves does not work: adjustText measures a PathCollection as
+    # a NaN bounding box, which takes the whole layout out.
+    xs = [x for x, _ in (avoid_points or [])] or None
+    ys = [y for _, y in (avoid_points or [])] or None
+
     adjust_text(
         texts,
+        x=xs,
+        y=ys,
         ax=ax,
         expand=(1.06, 1.18),
         force_text=(0.15, 0.30),
         ensure_inside_axes=True,
+        iter_lim=LABEL_ITERATIONS,
+        objects=objects or None,
         arrowprops=dict(
             arrowstyle="-",
             color=brand.text_muted,
@@ -406,10 +452,10 @@ def _label_units(panel: Panel, brand: Brand, *, extra_texts=None) -> None:
     )
 
 
-def _label_context(panel: Panel, brand: Brand) -> None:
+def _label_context(panel: Panel, brand: Brand) -> list:
     """Label neighbouring states in muted italic, inside the panel only."""
     if panel.context is None:
-        return
+        return []
     ax = panel.ax
     x0, x1 = ax.get_xlim()
     y0, y1 = ax.get_ylim()
@@ -418,12 +464,13 @@ def _label_context(panel: Panel, brand: Brand) -> None:
         crs=panel.crs,
     ).iloc[0]
 
+    labels = []
     for _, row in panel.context.iterrows():
         visible = row.geometry.intersection(view)
         if visible.is_empty or visible.area <= 0:
             continue
         point = visible.representative_point()
-        ax.text(
+        labels.append(ax.text(
             point.x,
             point.y,
             display(row["name"]),
@@ -433,14 +480,15 @@ def _label_context(panel: Panel, brand: Brand) -> None:
             ha="center",
             va="center",
             zorder=3,
-        )
+        ))
+    return labels
 
 
-def _label_water(panel: Panel, brand: Brand) -> None:
+def _label_water(panel: Panel, brand: Brand) -> list:
     """Label seas that fall inside the panel, in muted italic."""
     path = data_module.data_dir() / "sea_labels.csv"
     if not path.exists():
-        return
+        return []
 
     rows = []
     with path.open(newline="", encoding="utf-8") as handle:
@@ -451,15 +499,16 @@ def _label_water(panel: Panel, brand: Brand) -> None:
             except (KeyError, TypeError, ValueError):
                 continue
     if not rows:
-        return
+        return []
 
     ax = panel.ax
+    labels = []
     points = gpd.GeoSeries([Point(lon, lat) for _, lat, lon in rows], crs=4326).to_crs(panel.crs)
     x0, x1 = ax.get_xlim()
     y0, y1 = ax.get_ylim()
     for (name, _, _), point in zip(rows, points):
         if x0 < point.x < x1 and y0 < point.y < y1:
-            ax.text(
+            labels.append(ax.text(
                 point.x,
                 point.y,
                 name,
@@ -469,21 +518,28 @@ def _label_water(panel: Panel, brand: Brand) -> None:
                 ha="center",
                 va="center",
                 zorder=4,
-            )
+            ))
+    return labels
 
 
-def _draw_sites(panel: Panel, brand: Brand) -> list:
-    """Plot site points. Returns their labels so they join the layout pass."""
+def _draw_sites(panel: Panel, brand: Brand) -> tuple[list, list]:
+    """Plot site points.
+
+    Returns the labels, which join the layout pass, and the marker positions,
+    which the layout pass repels from so a label never lands on its own point.
+    """
     if not panel.sites:
-        return []
+        return [], []
 
     ax = panel.ax
     texts = []
+    points = []
     for site in panel.sites:
         point = gpd.GeoSeries(
             [Point(float(site["lon"]), float(site["lat"]))], crs=4326
         ).to_crs(panel.crs)
         x, y = point.x.iloc[0], point.y.iloc[0]
+        points.append((x, y))
         ax.scatter(
             [x],
             [y],
@@ -507,7 +563,7 @@ def _draw_sites(panel: Panel, brand: Brand) -> list:
                 zorder=9,
             )
         )
-    return texts
+    return texts, points
 
 
 def _add_north_arrow(ax, brand: Brand) -> None:
