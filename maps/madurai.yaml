@@ -1,0 +1,17 @@
+# Case 1 from the project brief: Madurai district, Tamil Nadu.
+#
+# Coordinates come from Google Maps: right-click the place and click the
+# lat/long pair at the top of the menu to copy it.
+
+state: Tamil Nadu
+district: Madurai
+blocks: [Madurai East]
+
+sites:
+  - name: Government Rajaji Hospital (GRH)
+    lat: 9.9195
+    lon: 78.1193
+    type: hospital
+
+title: null            # leave null to build the title from state and district
+output_name: madurai_locator

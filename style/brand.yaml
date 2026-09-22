@@ -49,7 +49,7 @@ markers:
 layout:
   # A4 landscape at 300 dpi is the print target.
   figure_width_in: 11.69
-  figure_height_in: 5.2
+  figure_height_in: 5.0
   panel_gap_in: 0.55        # space reserved for connector arrows
   margin_in: 0.35
 

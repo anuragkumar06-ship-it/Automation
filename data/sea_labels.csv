@@ -1,0 +1,13 @@
+# Water bodies labelled on state panels, in muted italic.
+# These are labels only - no water polygon is drawn from them.
+# A label appears only when its point falls inside the panel's extent.
+name,lat,lon
+Arabian Sea,15.0,70.5
+Bay of Bengal,15.0,86.5
+Indian Ocean,6.5,78.0
+Gulf of Mannar,8.9,78.9
+Palk Strait,9.75,79.5
+Gulf of Khambhat,21.2,72.3
+Gulf of Kachchh,22.6,69.3
+Laccadive Sea,9.0,74.0
+Andaman Sea,11.5,94.5
