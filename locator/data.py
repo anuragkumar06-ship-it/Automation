@@ -233,10 +233,17 @@ def load_blocks() -> gpd.GeoDataFrame:
     return out
 
 
-def districts_of(state_key: str) -> gpd.GeoDataFrame:
-    """Return the districts of one state, matched on the normalised state name."""
+def districts_of(state_lgd) -> gpd.GeoDataFrame:
+    """Return the districts of one state, matched on LGD state code.
+
+    Matching on the code rather than the name is what makes every state work.
+    The layers disagree on punctuation for at least one union territory - the
+    state layer writes "DADRA & NAGAR HAVELI & DAMAN & DIU" where the district
+    layer writes "DADRA,NAGAR HAVELI,DAMAN & DIU" - and a name match silently
+    returns nothing. All 785 districts match a state by code.
+    """
     districts = load_districts()
-    return districts[districts["state_key"] == state_key].copy()
+    return districts[districts["state_lgd"].astype("int64") == int(state_lgd)].copy()
 
 
 def blocks_of(district_lgd) -> gpd.GeoDataFrame:

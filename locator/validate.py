@@ -167,7 +167,7 @@ def validate_request(
     if alias_hit:
         report.info("names", alias_hit.message())
 
-    districts = data_module.districts_of(name_key(state_display))
+    districts = data_module.districts_of(state_row["lgd"])
     if districts.empty:
         report.error(
             "district layer",
@@ -296,11 +296,14 @@ def _check_count(*, report, references, aliases, level, parent, observed_names, 
     observed = len(observed_names)
 
     if reference is None:
-        report.warning(
+        # Not having a reference is a gap in our records, not a fault in the
+        # map, so it is reported but does not stop the render. A reference that
+        # actively disagrees is a different matter and still warns below.
+        report.info(
             f"{level} count",
-            f"No LGD reference is recorded for {what}, so the count of {observed} "
-            f"has not been independently checked. Add a row to "
-            f"data/lgd/reference_counts.csv to enable this check.",
+            f"{observed} {level}s found. No independent reference is recorded for "
+            f"{what}, so this count has not been cross-checked. Add a row to "
+            f"data/lgd/reference_counts.csv to turn that check on.",
         )
         return
 

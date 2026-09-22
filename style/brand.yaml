@@ -8,50 +8,70 @@ font:
   family: [Gellix, Arial, Helvetica, DejaVu Sans]
 
 colours:
-  text: "#000048"            # midnight blue - all type
-  text_muted: "#6E6E78"      # seas, neighbouring states, source line
+  text: "#000048"            # midnight blue - titles and target labels
+  text_secondary: "#5A5A6E"  # ordinary unit labels, so they sit behind the target
+  text_muted: "#9A9AA6"      # seas, neighbouring states, source line
 
   unit_fill: "#D0D0CE"       # non-target states / districts / blocks
   unit_edge: "#FFFFFF"       # white hairline borders between units
+  context_fill: "#EBEBE9"    # neighbouring states, behind the mapped one
 
   highlight: "#05819B"       # the target unit on each panel
+  highlight_edge: "#03697E"  # a darker rim on the target, so it reads as raised
   highlight_secondary: "#06C7CC"  # additional target blocks beyond the first
 
   water: "#FFFFFF"           # sea and inland water
   background: "#FFFFFF"
+  panel_fill: "#FCFCFB"      # very light panel ground
+  panel_edge: "#E4E4E0"      # hairline frame around each panel
+  rule: "#000048"            # the rule under the title
 
   site_marker: "#000048"     # site points
-  connector: "#05819B"       # arrows between panels
+  callout: "#05819B"         # the detail box and the lines to the next panel
 
 line_widths:
-  unit_edge: 0.4
-  highlight_edge: 0.8
-  panel_frame: 0.6
-  connector: 1.4
-  leader_line: 0.4
+  unit_edge: 0.35
+  highlight_edge: 0.7
+  panel_frame: 0.5
+  callout_box: 0.9
+  callout_line: 0.6
+  title_rule: 1.1
+  caption_rule: 0.8
+  leader_line: 0.35
 
 type_sizes:
-  panel_title: 11
-  unit_label: 6.5
-  target_label: 7.5
-  site_label: 7
+  title: 15
+  panel_caption: 9.5
+  unit_label: 6
+  target_label: 8.5
+  context_label: 6.5
+  site_label: 7.5
   legend: 7
-  scale_bar: 6.5
-  source_line: 6
+  scale_bar: 6
+  source_line: 5.5
+
+labels:
+  # How much to label. "all" labels every unit, "auto" drops units too small to
+  # carry a label without a tangle of leader lines, "target_only" labels just
+  # the highlighted unit.
+  density: auto
+  # In auto mode, skip a unit whose drawn size is smaller than this, in points.
+  # The target unit and any site are always labelled whatever their size.
+  min_size_points: 9.5
 
 markers:
   hospital: o
   school: s
   camp: ^
   default: o
-  size: 28
+  size: 34
 
 layout:
-  # A4 landscape at 300 dpi is the print target.
+  # A4 landscape width. The height is worked out from the shapes being drawn.
   figure_width_in: 11.69
-  figure_height_in: 5.0
-  panel_gap_in: 0.55        # space reserved for connector arrows
-  margin_in: 0.35
+  figure_height_in: 6.2       # treated as a maximum, trimmed to fit
+  panel_gap_in: 0.62          # space for the lines joining one panel to the next
+  margin_in: 0.42
 
 rules:
   # Sentence case everywhere, never all caps or title case.

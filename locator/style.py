@@ -41,6 +41,10 @@ class Brand:
         return self.colour("text")
 
     @property
+    def text_secondary(self) -> str:
+        return self.colour("text_secondary")
+
+    @property
     def text_muted(self) -> str:
         return self.colour("text_muted")
 
@@ -73,8 +77,37 @@ class Brand:
         return self.colour("site_marker")
 
     @property
-    def connector(self) -> str:
-        return self.colour("connector")
+    def callout(self) -> str:
+        return self.colour("callout")
+
+    @property
+    def highlight_rim(self) -> str:
+        return self.colour("highlight_edge")
+
+    @property
+    def context_fill(self) -> str:
+        return self.colour("context_fill")
+
+    @property
+    def panel_fill(self) -> str:
+        return self.colour("panel_fill")
+
+    @property
+    def panel_edge(self) -> str:
+        return self.colour("panel_edge")
+
+    @property
+    def rule(self) -> str:
+        return self.colour("rule")
+
+    # -- label policy ------------------------------------------------------
+    @property
+    def label_density(self) -> str:
+        return str(self.raw.get("labels", {}).get("density", "auto")).lower()
+
+    @property
+    def label_min_points(self) -> float:
+        return float(self.raw.get("labels", {}).get("min_size_points", 8))
 
     # -- measurements ------------------------------------------------------
     def width(self, name: str) -> float:

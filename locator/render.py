@@ -2,16 +2,27 @@
 
 Panels run left to right: India with the target state highlighted, the state
 with the target district highlighted, then the district with the target
-block(s) highlighted and any site points marked. Connector arrows run from each
-highlighted unit into the panel that zooms into it.
+block(s) highlighted and any site points marked.
 
-Every polygon drawn here comes from a layer loaded by :mod:`locator.data`.
+Three decisions shape how this looks.
 
-Layout note. India is tall, Tamil Nadu is taller and a district is usually
-wide. Giving all three panels the same rectangle would leave most of the page
-empty, so the panels share one height and each takes the width its own shape
-needs. Simplification tolerances stay below one printed pixel at 600 dpi, so
-shapes never visibly change, and they are recorded in the render log.
+**Detail callouts, not arrows.** Each panel carries a thin teal box around the
+area the next panel enlarges, with two light lines running from that box to the
+corners of the next panel. This is the convention an atlas uses for an inset. A
+single arrow across the gap read as a stray diagonal.
+
+**Tiered labels.** The target unit is the loud one. Every other unit is set
+smaller and in a grey that sits behind it, and in the default ``auto`` density a
+unit too small to carry a label without a tangle of leader lines does not get
+one. How many were left off is recorded in the render log, so nothing is
+quietly dropped.
+
+**Page structure.** A title with a rule under it, panels on a light ground
+inside hairline frames, captions with their own short rules, then the legend and
+the source line. The height of the figure follows the shapes being drawn.
+
+Every polygon comes from a layer loaded by :mod:`locator.data`. Simplification
+stays below one printed pixel at 600 dpi, so shapes never visibly change.
 """
 
 from __future__ import annotations
@@ -44,26 +55,26 @@ SIMPLIFY_INDIA_M = 400
 SIMPLIFY_STATE_M = 60
 SIMPLIFY_DISTRICT_M = 10
 
-# Fraction of panel height kept clear at the bottom for the scale bar.
-SCALE_BAND = 0.11
-# Breathing room around the mapped area.
-EXTENT_PAD = 0.02
-
-# adjustText stops after a one second time limit unless it is told otherwise,
-# which makes label positions depend on how busy the machine is. Pinning the
-# iteration count instead is what makes two runs produce the same picture.
-LABEL_ITERATIONS = 80
-
 # Neighbouring states are background context, so they are thinned hard before
 # the adjacency test. Comparing full-resolution coastlines against every state
 # is the single most expensive thing this module could do.
 NEIGHBOUR_SIMPLIFY_M = 500
 
-# Fixed bands, in inches, for the running title above the panels and for the
+# adjustText stops after a one second time limit unless it is told otherwise,
+# which makes label positions depend on how busy the machine is. Pinning the
+# iteration count instead is what makes two runs produce the same picture.
+LABEL_ITERATIONS = 260
+
+# Fraction of panel height kept clear at the bottom for the scale bar.
+SCALE_BAND = 0.10
+# Breathing room around the mapped area.
+EXTENT_PAD = 0.02
+
+# Fixed bands, in inches, for the title block above the panels and for the
 # legend plus source line below them. Keeping these in inches rather than as a
 # fraction means type stays the same size whatever height the panels come out.
-BAND_TOP_IN = 0.68
-BAND_BOTTOM_IN = 0.72
+BAND_TOP_IN = 0.95
+BAND_BOTTOM_IN = 0.80
 
 
 @dataclass
@@ -78,7 +89,7 @@ class Panel:
     """One prepared panel: its geometry, extent and how it should be drawn."""
 
     kind: str
-    title: str
+    caption: str
     frame: gpd.GeoDataFrame
     crs: object
     highlight_mask: object
@@ -88,6 +99,7 @@ class Panel:
     label_frame: gpd.GeoDataFrame | None = None
     sites: list[dict] = field(default_factory=list)
     ax: object = None
+    labels_skipped: int = 0
 
     @property
     def aspect(self) -> float:
@@ -119,9 +131,9 @@ def render_map(*, target, config: dict, brand: Brand, report, output_dir: Path) 
     )
 
     # How tall the three panels turn out depends on how wide their shapes are:
-    # a wide state such as Bihar forces shorter panels than a narrow one such
-    # as Tamil Nadu. The figure is trimmed to fit rather than left with a band
-    # of empty paper, so the image drops into a document at a sensible size.
+    # a wide state such as Bihar forces shorter panels than a narrow one such as
+    # Tamil Nadu. The figure is trimmed to fit rather than left with a band of
+    # empty paper, so the image drops into a document at a sensible size.
     height = panel_h + BAND_TOP_IN + BAND_BOTTOM_IN
 
     figure = plt.figure(figsize=(width, height), facecolor=brand.background)
@@ -130,44 +142,33 @@ def render_map(*, target, config: dict, brand: Brand, report, output_dir: Path) 
     for panel, panel_w in zip(panels, panel_widths):
         panel.ax = figure.add_axes(
             [cursor / width, BAND_BOTTOM_IN / height, panel_w / width, panel_h / height],
-            facecolor=brand.water,
+            facecolor=brand.panel_fill,
         )
         cursor += panel_w + gap
 
     for panel in panels:
         _draw_panel(panel, brand)
 
-    _connect(figure, panels[0], panels[1], brand)
-    _connect(figure, panels[1], panels[2], brand)
+    # Callouts are drawn once every panel has its final limits, because the box
+    # on one panel is the extent of the next.
+    _draw_callout(figure, panels[0], panels[1], brand)
+    _draw_callout(figure, panels[1], panels[2], brand)
 
-    _add_legend(figure, panels[2], brand, target=target)
-
-    # ---- running title and source line ------------------------------------
     title = config.get("title") or f"{target.district_name} district, {target.state_name}"
-    figure.text(
-        margin / width,
-        1 - 0.26 / height,
-        title,
-        ha="left",
-        va="center",
-        fontsize=brand.size("panel_title") + 3,
-        color=brand.text,
-        fontweight="bold",
-    )
+    _draw_title_block(figure, title, brand, margin=margin, width=width, height=height)
+    _draw_legend(figure, panels[2], brand, target=target)
 
     source_line = _source_line()
     figure.text(
         margin / width,
-        0.17 / height,
+        0.22 / height,
         source_line,
         ha="left",
         va="center",
         fontsize=brand.size("source_line"),
         color=brand.text_muted,
     )
-    notes.append(f"Source line: {source_line}")
 
-    # ---- write the files --------------------------------------------------
     name = config.get("output_name") or "locator_map"
     files: list[Path] = []
     for path, kwargs in [
@@ -180,6 +181,7 @@ def render_map(*, target, config: dict, brand: Brand, report, output_dir: Path) 
         files.append(path)
     plt.close(figure)
 
+    notes.append(f"Source line: {source_line}")
     notes.append(
         f"Simplification: India {SIMPLIFY_INDIA_M} m, state {SIMPLIFY_STATE_M} m, "
         f"district {SIMPLIFY_DISTRICT_M} m (all below one pixel at 600 dpi)."
@@ -192,6 +194,16 @@ def render_map(*, target, config: dict, brand: Brand, report, output_dir: Path) 
         + ", ".join(f"{p.kind} {w:.2f}" for p, w in zip(panels, panel_widths))
         + f"; shared height {panel_h:.2f}"
     )
+    density_note = f"Label density: {brand.label_density}"
+    if brand.label_density == "auto":
+        density_note += f" (minimum drawn size {brand.label_min_points:g} pt)"
+    notes.append(density_note)
+    for panel in panels:
+        if panel.labels_skipped:
+            notes.append(
+                f"  {panel.kind} panel: {panel.labels_skipped} unit(s) left unlabelled, "
+                f"too small to label legibly at this size"
+            )
     notes.append(f"Label layout: {LABEL_ITERATIONS} fixed iterations (not time limited).")
     notes.append(f"Font used: {brand.font_family}.")
 
@@ -205,14 +217,13 @@ def render_map(*, target, config: dict, brand: Brand, report, output_dir: Path) 
 
 def _prepare_panels(target, brand: Brand) -> list[Panel]:
     """Reproject, simplify and work out the extent for all three panels."""
-    # ---- panel 1: India ---------------------------------------------------
     india_crs = india_lcc()
     states = data_module.load_states().to_crs(india_crs).copy()
     states["geometry"] = states.geometry.simplify(SIMPLIFY_INDIA_M, preserve_topology=True)
     states = _repair(states)
     india = Panel(
         kind="india",
-        title="India",
+        caption="India",
         frame=states,
         crs=india_crs,
         highlight_mask=states["name_key"] == target.state_key,
@@ -221,28 +232,25 @@ def _prepare_panels(target, brand: Brand) -> list[Panel]:
         label_frame=states[~states["disputed"]],
     )
 
-    # ---- panel 2: the state ----------------------------------------------
     districts = target.districts.copy()
     state_crs = local_crs(districts)
     districts = districts.to_crs(state_crs)
     districts["geometry"] = districts.geometry.simplify(SIMPLIFY_STATE_M, preserve_topology=True)
     districts = _repair(districts)
 
-    neighbours = _neighbours_of(target, state_crs)
     state = Panel(
         kind="state",
-        title=target.state_name,
+        caption=target.state_name,
         frame=districts,
         crs=state_crs,
         highlight_mask=districts["name_key"] == target.district_row["name_key"],
         highlight_colours=[brand.highlight],
-        # Extent comes from the state's own districts, never from the
+        # Extent comes from the districts of this state, never from the
         # neighbouring states, which are context only.
         extent=_extent(districts.total_bounds),
-        context=neighbours,
+        context=_neighbours_of(target, state_crs),
     )
 
-    # ---- panel 3: the district -------------------------------------------
     blocks = target.blocks.copy()
     district_crs = local_crs(blocks)
     blocks = blocks.to_crs(district_crs)
@@ -252,7 +260,7 @@ def _prepare_panels(target, brand: Brand) -> list[Panel]:
     mask = blocks["name"].isin(target.target_block_names)
     district = Panel(
         kind="district",
-        title=f"{target.district_name} district",
+        caption=f"{target.district_name} district",
         frame=blocks,
         crs=district_crs,
         highlight_mask=mask,
@@ -288,9 +296,9 @@ def _allocate(aspects: list[float], *, available_w: float, available_h: float):
 def _neighbours_of(target, crs) -> gpd.GeoDataFrame | None:
     """The states touching the target state, drawn faintly for orientation.
 
-    Thinned and looked up through the spatial index rather than by measuring
-    the exact distance from every state, which on full-resolution coastlines
-    takes about a minute.
+    Thinned and looked up through the spatial index rather than by measuring the
+    exact distance from every state, which on full-resolution coastlines takes
+    about a minute.
     """
     states = data_module.load_states().to_crs(crs).copy()
     states["geometry"] = states.geometry.simplify(NEIGHBOUR_SIMPLIFY_M, preserve_topology=True)
@@ -300,18 +308,29 @@ def _neighbours_of(target, crs) -> gpd.GeoDataFrame | None:
     if match.empty:
         return None
 
-    # A small buffer catches states that share a border without their
-    # simplified outlines quite meeting.
+    # A small buffer catches states that share a border without their simplified
+    # outlines quite meeting.
     probe = match.iloc[0].buffer(NEIGHBOUR_SIMPLIFY_M * 4)
     nearby = states.iloc[states.sindex.query(probe, predicate="intersects")]
-    neighbours = nearby[
-        (nearby["name_key"] != target.state_key) & (~nearby["disputed"])
-    ]
+    neighbours = nearby[(nearby["name_key"] != target.state_key) & (~nearby["disputed"])]
     return neighbours if len(neighbours) else None
 
 
+def _repair(frame: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """Fix self-intersecting outlines for drawing only.
+
+    The validator has already reported anything it had to repair, so this never
+    hides a problem from the user.
+    """
+    invalid = ~frame.geometry.is_valid
+    if invalid.any():
+        frame = frame.copy()
+        frame.loc[invalid, "geometry"] = frame.loc[invalid, "geometry"].make_valid()
+    return frame
+
+
 # --------------------------------------------------------------------------
-# drawing
+# drawing a panel
 # --------------------------------------------------------------------------
 
 
@@ -321,7 +340,7 @@ def _draw_panel(panel: Panel, brand: Brand) -> None:
     if panel.context is not None:
         panel.context.plot(
             ax=ax,
-            facecolor="#EAEAE8",
+            facecolor=brand.context_fill,
             edgecolor=brand.unit_edge,
             linewidth=brand.width("unit_edge"),
             zorder=0,
@@ -343,7 +362,7 @@ def _draw_panel(panel: Panel, brand: Brand) -> None:
         gpd.GeoSeries([row.geometry], crs=panel.frame.crs).plot(
             ax=ax,
             facecolor=colour,
-            edgecolor=brand.unit_edge,
+            edgecolor=brand.highlight_rim,
             linewidth=brand.width("highlight_edge"),
             zorder=2,
         )
@@ -353,7 +372,7 @@ def _draw_panel(panel: Panel, brand: Brand) -> None:
     ax.set_xlim(x0, x1)
     ax.set_ylim(y0, y1)
     ax.set_aspect("equal")
-    ax.set_axis_off()
+    _frame_panel(ax, brand)
 
     # Everything the unit labels must not collide with is drawn first, then
     # handed to the label pass as fixed obstacles.
@@ -364,50 +383,68 @@ def _draw_panel(panel: Panel, brand: Brand) -> None:
 
     site_texts, site_points = _draw_sites(panel, brand)
 
-    _label_units(
-        panel,
-        brand,
-        extra_texts=site_texts,
-        objects=obstacles,
-        avoid_points=site_points,
-    )
+    _label_units(panel, brand, extra_texts=site_texts, objects=obstacles, avoid_points=site_points)
 
-    ax.set_title(
-        panel.title,
-        loc="left",
-        fontsize=brand.size("panel_title"),
-        color=brand.text,
-        pad=6,
-    )
+    _caption_panel(ax, panel.caption, brand)
     _add_north_arrow(ax, brand)
     _add_scale_bar(ax, brand)
 
 
-def _repair(frame: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    """Fix self-intersecting outlines for drawing only.
+def _frame_panel(ax, brand: Brand) -> None:
+    """A hairline frame, so each panel reads as its own map rather than a blob."""
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(True)
+        spine.set_linewidth(brand.width("panel_frame"))
+        spine.set_edgecolor(brand.panel_edge)
 
-    The validator has already reported anything it had to repair, so this never
-    hides a problem from the user.
-    """
-    invalid = ~frame.geometry.is_valid
-    if invalid.any():
-        frame = frame.copy()
-        frame.loc[invalid, "geometry"] = frame.loc[invalid, "geometry"].make_valid()
-    return frame
+
+def _caption_panel(ax, caption: str, brand: Brand) -> None:
+    """Panel name above the frame, with a short rule under it."""
+    ax.text(
+        0.0,
+        1.062,
+        caption,
+        transform=ax.transAxes,
+        ha="left",
+        va="bottom",
+        fontsize=brand.size("panel_caption"),
+        color=brand.text,
+    )
+    ax.plot(
+        [0.0, 0.085],
+        [1.038, 1.038],
+        transform=ax.transAxes,
+        color=brand.rule,
+        linewidth=brand.width("caption_rule"),
+        solid_capstyle="butt",
+        clip_on=False,
+        zorder=12,
+    )
+
+
+# --------------------------------------------------------------------------
+# labels
+# --------------------------------------------------------------------------
 
 
 def _label_units(
     panel: Panel, brand: Brand, *, extra_texts=None, objects=None, avoid_points=None
 ) -> None:
-    """Place one label per unit, nudged apart and joined by leader lines."""
+    """Place unit labels, tiered, and nudge them apart with leader lines."""
     from adjustText import adjust_text
 
     ax = panel.ax
     frame = panel.label_frame if panel.label_frame is not None else panel.frame
     highlight = panel.highlight_mask.reindex(frame.index, fill_value=False)
 
+    keep, skipped = _labels_to_draw(panel, frame, highlight, brand)
+    panel.labels_skipped = skipped
+
     texts = list(extra_texts or [])
-    for (_, row), is_target in zip(frame.iterrows(), highlight):
+    for index, row in frame.loc[keep].iterrows():
+        is_target = bool(highlight.loc[index])
         point = row.geometry.representative_point()
         texts.append(
             ax.text(
@@ -415,7 +452,7 @@ def _label_units(
                 point.y,
                 display(row["name"]),
                 fontsize=brand.size("target_label") if is_target else brand.size("unit_label"),
-                color=brand.text,
+                color=brand.text if is_target else brand.text_secondary,
                 ha="center",
                 va="center",
                 fontweight="bold" if is_target else "normal",
@@ -437,8 +474,9 @@ def _label_units(
         x=xs,
         y=ys,
         ax=ax,
-        expand=(1.06, 1.18),
-        force_text=(0.15, 0.30),
+        expand=(1.12, 1.30),
+        force_text=(0.35, 0.55),
+        force_static=(0.25, 0.45),
         ensure_inside_axes=True,
         iter_lim=LABEL_ITERATIONS,
         objects=objects or None,
@@ -450,6 +488,36 @@ def _label_units(
             shrinkB=2,
         ),
     )
+
+
+def _labels_to_draw(panel: Panel, frame, highlight, brand: Brand):
+    """Decide which units get a label.
+
+    Returns the index to keep and how many were left off. In ``auto`` density a
+    unit is labelled only if it is drawn large enough to carry the text without
+    a leader line running halfway across the panel. The target is always
+    labelled, however small it is.
+    """
+    density = brand.label_density
+    if density == "all":
+        return frame.index, 0
+    if density == "target_only":
+        keep = frame.index[highlight.to_numpy()]
+        return keep, int(len(frame) - len(keep))
+
+    # auto: measure each unit in points as it will actually be drawn.
+    ax = panel.ax
+    x0, x1 = ax.get_xlim()
+    box = ax.get_window_extent()
+    points_per_unit = (box.width * 72 / ax.figure.dpi) / (x1 - x0)
+
+    bounds = frame.geometry.bounds
+    across = (bounds["maxx"] - bounds["minx"]).clip(lower=0)
+    up = (bounds["maxy"] - bounds["miny"]).clip(lower=0)
+    drawn = across.combine(up, max) * points_per_unit
+
+    keep_mask = (drawn >= brand.label_min_points).to_numpy() | highlight.to_numpy()
+    return frame.index[keep_mask], int((~keep_mask).sum())
 
 
 def _label_context(panel: Panel, brand: Brand) -> list:
@@ -470,17 +538,19 @@ def _label_context(panel: Panel, brand: Brand) -> list:
         if visible.is_empty or visible.area <= 0:
             continue
         point = visible.representative_point()
-        labels.append(ax.text(
-            point.x,
-            point.y,
-            display(row["name"]),
-            fontsize=brand.size("unit_label"),
-            color=brand.text_muted,
-            style="italic",
-            ha="center",
-            va="center",
-            zorder=3,
-        ))
+        labels.append(
+            ax.text(
+                point.x,
+                point.y,
+                display(row["name"]),
+                fontsize=brand.size("context_label"),
+                color=brand.text_muted,
+                style="italic",
+                ha="center",
+                va="center",
+                zorder=3,
+            )
+        )
     return labels
 
 
@@ -508,17 +578,19 @@ def _label_water(panel: Panel, brand: Brand) -> list:
     y0, y1 = ax.get_ylim()
     for (name, _, _), point in zip(rows, points):
         if x0 < point.x < x1 and y0 < point.y < y1:
-            labels.append(ax.text(
-                point.x,
-                point.y,
-                name,
-                fontsize=brand.size("unit_label"),
-                color=brand.text_muted,
-                style="italic",
-                ha="center",
-                va="center",
-                zorder=4,
-            ))
+            labels.append(
+                ax.text(
+                    point.x,
+                    point.y,
+                    name,
+                    fontsize=brand.size("context_label"),
+                    color=brand.text_muted,
+                    style="italic",
+                    ha="center",
+                    va="center",
+                    zorder=4,
+                )
+            )
     return labels
 
 
@@ -535,9 +607,9 @@ def _draw_sites(panel: Panel, brand: Brand) -> tuple[list, list]:
     texts = []
     points = []
     for site in panel.sites:
-        point = gpd.GeoSeries(
-            [Point(float(site["lon"]), float(site["lat"]))], crs=4326
-        ).to_crs(panel.crs)
+        point = gpd.GeoSeries([Point(float(site["lon"]), float(site["lat"]))], crs=4326).to_crs(
+            panel.crs
+        )
         x, y = point.x.iloc[0], point.y.iloc[0]
         points.append((x, y))
         ax.scatter(
@@ -547,7 +619,7 @@ def _draw_sites(panel: Panel, brand: Brand) -> tuple[list, list]:
             s=brand.marker_size,
             color=brand.site_marker,
             edgecolor="#FFFFFF",
-            linewidth=0.6,
+            linewidth=0.8,
             zorder=8,
         )
         texts.append(
@@ -566,19 +638,26 @@ def _draw_sites(panel: Panel, brand: Brand) -> tuple[list, list]:
     return texts, points
 
 
+# --------------------------------------------------------------------------
+# furniture
+# --------------------------------------------------------------------------
+
+
 def _add_north_arrow(ax, brand: Brand) -> None:
-    """A plain north arrow in the top-right corner of the panel."""
+    """A plain north arrow in the reserved band at the bottom right."""
     ax.annotate(
         "N",
-        xy=(0.965, 0.085),
-        xytext=(0.965, 0.018),
+        xy=(0.955, 0.072),
+        xytext=(0.955, 0.016),
         xycoords="axes fraction",
         textcoords="axes fraction",
         ha="center",
         va="center",
         fontsize=brand.size("scale_bar"),
-        color=brand.text,
-        arrowprops=dict(arrowstyle="-|>", color=brand.text, lw=0.8, shrinkA=0, shrinkB=0),
+        color=brand.text_secondary,
+        arrowprops=dict(
+            arrowstyle="-|>", color=brand.text_secondary, lw=0.7, shrinkA=0, shrinkB=0
+        ),
         zorder=11,
     )
 
@@ -589,36 +668,36 @@ def _add_scale_bar(ax, brand: Brand) -> None:
     y0, y1 = ax.get_ylim()
     span_km = (x1 - x0) / 1000.0
 
-    bar_km = _nice_distance(span_km * 0.25)
+    bar_km = _nice_distance(span_km * 0.22)
     bar_m = bar_km * 1000
-    bar_x = x0 + (x1 - x0) * 0.03
-    bar_y = y0 + (y1 - y0) * 0.035
-    bar_height = (y1 - y0) * 0.007
+    bar_x = x0 + (x1 - x0) * 0.035
+    bar_y = y0 + (y1 - y0) * 0.032
+    bar_height = (y1 - y0) * 0.006
 
     ax.add_patch(
         Rectangle(
             (bar_x, bar_y),
             bar_m,
             bar_height,
-            facecolor=brand.text,
+            facecolor=brand.text_secondary,
             edgecolor="none",
             zorder=10,
         )
     )
     ax.text(
         bar_x + bar_m / 2,
-        bar_y + bar_height * 2.4,
+        bar_y + bar_height * 2.6,
         f"{bar_km:g} km",
         ha="center",
         va="bottom",
         fontsize=brand.size("scale_bar"),
-        color=brand.text,
+        color=brand.text_secondary,
         zorder=10,
     )
 
 
 def _nice_distance(raw_km: float) -> float:
-    """Round a distance down to 1, 2 or 5 times a power of ten."""
+    """Round a distance up to 1, 2 or 5 times a power of ten."""
     if raw_km <= 0:
         return 1
     magnitude = 10 ** int(f"{raw_km:e}".split("e")[1])
@@ -628,7 +707,92 @@ def _nice_distance(raw_km: float) -> float:
     return 10 * magnitude
 
 
-def _add_legend(figure, panel: Panel, brand: Brand, *, target) -> None:
+def _draw_title_block(figure, title: str, brand: Brand, *, margin, width, height) -> None:
+    """The running title, with a rule under it across the page."""
+    figure.text(
+        margin / width,
+        1 - 0.30 / height,
+        title,
+        ha="left",
+        va="center",
+        fontsize=brand.size("title"),
+        color=brand.text,
+        fontweight="bold",
+    )
+    rule_y = 1 - 0.48 / height
+    figure.add_artist(
+        Line2D(
+            [margin / width, 1 - margin / width],
+            [rule_y, rule_y],
+            transform=figure.transFigure,
+            color=brand.rule,
+            linewidth=brand.width("title_rule"),
+            solid_capstyle="butt",
+        )
+    )
+
+
+def _draw_callout(figure, panel_from: Panel, panel_to: Panel, brand: Brand) -> None:
+    """Box the area the next panel enlarges, and run two light lines to it.
+
+    This is the inset convention an atlas uses. The box sits on the wider panel
+    and its right-hand corners join the left-hand corners of the panel that
+    shows that area in detail.
+    """
+    nx0, nx1, ny0, ny1 = panel_to.extent
+    corners = gpd.GeoSeries(
+        [Point(nx0, ny0), Point(nx1, ny0), Point(nx1, ny1), Point(nx0, ny1)],
+        crs=panel_to.crs,
+    ).to_crs(panel_from.crs)
+
+    bx0, bx1 = float(corners.x.min()), float(corners.x.max())
+    by0, by1 = float(corners.y.min()), float(corners.y.max())
+
+    # A box smaller than a couple of points would read as a smudge, so give it a
+    # floor relative to the panel it sits on.
+    ax = panel_from.ax
+    px0, px1 = ax.get_xlim()
+    py0, py1 = ax.get_ylim()
+    floor_x = (px1 - px0) * 0.015
+    floor_y = (py1 - py0) * 0.015
+    if bx1 - bx0 < floor_x:
+        mid = (bx0 + bx1) / 2
+        bx0, bx1 = mid - floor_x / 2, mid + floor_x / 2
+    if by1 - by0 < floor_y:
+        mid = (by0 + by1) / 2
+        by0, by1 = mid - floor_y / 2, mid + floor_y / 2
+
+    ax.add_patch(
+        Rectangle(
+            (bx0, by0),
+            bx1 - bx0,
+            by1 - by0,
+            facecolor="none",
+            edgecolor=brand.callout,
+            linewidth=brand.width("callout_box"),
+            zorder=15,
+        )
+    )
+
+    # Two lines from the right-hand corners of the box to the left-hand corners
+    # of the next panel. Kept light so they read as a callout, not an arrow.
+    for corner_y, target_y in ((by1, 1.0), (by0, 0.0)):
+        figure.add_artist(
+            ConnectionPatch(
+                xyA=(bx1, corner_y),
+                coordsA=ax.transData,
+                xyB=(0.0, target_y),
+                coordsB=panel_to.ax.transAxes,
+                color=brand.callout,
+                linewidth=brand.width("callout_line"),
+                alpha=0.45,
+                zorder=14,
+                clip_on=False,
+            )
+        )
+
+
+def _draw_legend(figure, panel: Panel, brand: Brand, *, target) -> None:
     """Legend under the district panel, so it never sits on top of the map."""
     handles = []
     for name, colour in zip(target.target_block_names, panel.highlight_colours):
@@ -677,39 +841,17 @@ def _add_legend(figure, panel: Panel, brand: Brand, *, target) -> None:
     legend = figure.legend(
         handles=handles,
         loc="upper left",
-        bbox_to_anchor=(box.x0, box.y0 - 0.012),
+        bbox_to_anchor=(box.x0, box.y0 - 0.022),
         frameon=False,
         fontsize=brand.size("legend"),
         handletextpad=0.6,
         labelspacing=0.4,
         borderpad=0.0,
         ncols=min(len(handles), 3),
-        columnspacing=1.4,
+        columnspacing=1.5,
     )
     for text in legend.get_texts():
-        text.set_color(brand.text)
-
-
-def _connect(figure, panel_from: Panel, panel_to: Panel, brand: Brand) -> None:
-    """Draw a solid arrow from the highlighted unit into the next panel."""
-    highlighted = panel_from.frame[panel_from.highlight_mask]
-    if highlighted.empty:
-        return
-    anchor = highlighted.geometry.union_all().representative_point()
-
-    patch = ConnectionPatch(
-        xyA=(anchor.x, anchor.y),
-        coordsA=panel_from.ax.transData,
-        xyB=(-0.025, 0.5),
-        coordsB=panel_to.ax.transAxes,
-        arrowstyle="-|>",
-        mutation_scale=11,
-        linewidth=brand.width("connector"),
-        color=brand.connector,
-        zorder=20,
-        clip_on=False,
-    )
-    figure.add_artist(patch)
+        text.set_color(brand.text_secondary)
 
 
 def _source_line() -> str:
