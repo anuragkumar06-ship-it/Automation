@@ -189,10 +189,29 @@ def main(argv: list[str] | None = None) -> int:
     )
     render.add_argument("--output-dir", default=None, help="where to write the output folder")
 
-    fetch = subparsers.add_parser("fetch", help="download the boundary data ahead of time")
-    fetch.parse_args  # no options
+    subparsers.add_parser("fetch", help="download the boundary data ahead of time")
+
+    prepare = subparsers.add_parser(
+        "prepare",
+        help="split the national files into the per-state cache the app reads",
+    )
+    prepare.add_argument(
+        "--no-subdistricts",
+        action="store_true",
+        help="skip the sub-district layer, which only a few districts need",
+    )
 
     args = parser.parse_args(argv)
+
+    if args.command == "prepare":
+        from .cache import prepare_cache
+
+        for key in data_module.DATASETS:
+            if key == "subdistricts" and args.no_subdistricts:
+                continue
+            data_module.ensure_dataset(key, log=print)
+        prepare_cache(log=print, include_subdistricts=not args.no_subdistricts)
+        return 0
 
     if args.command == "fetch":
         for key in data_module.DATASETS:

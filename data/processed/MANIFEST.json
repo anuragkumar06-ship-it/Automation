@@ -1,0 +1,34 @@
+{
+  "built_on": "2026-09-25",
+  "state_simplify_m": 150,
+  "note": "Derived from the raw files described in data/SOURCES.md. District and block geometry is copied through unchanged. Rebuild with python -m locator prepare.",
+  "sources": {
+    "states": {
+      "file": "SOI_States.parquet",
+      "size_mb": 19.1
+    },
+    "districts": {
+      "file": "LGD_Districts.parquet",
+      "size_mb": 34.5
+    },
+    "blocks": {
+      "file": "LGD_Blocks.parquet",
+      "size_mb": 100.0
+    }
+  },
+  "counts": {
+    "states": 40,
+    "districts": 785,
+    "district_files": 36,
+    "blocks": 7146,
+    "block_files": 36,
+    "index_rows": 785,
+    "unit_index_rows": 7146,
+    "subdistrict_files": 1
+  },
+  "districts_without_blocks": 17,
+  "states_needing_subdistricts": [
+    8
+  ],
+  "cache_size_mb": 108.2
+}

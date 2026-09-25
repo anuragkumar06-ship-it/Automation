@@ -21,6 +21,7 @@ from functools import lru_cache
 from pathlib import Path
 
 import geopandas as gpd
+import pandas as pd
 
 from .names import key as name_key
 
@@ -180,6 +181,12 @@ def load_states() -> gpd.GeoDataFrame:
     would leave holes in the national outline, and flagged so they are never
     labelled or offered as a target.
     """
+    from . import cache as cache_module
+
+    cached = cache_module.read_states()
+    if cached is not None:
+        return cached
+
     frame = _read("states")
     out = gpd.GeoDataFrame(
         {
@@ -222,7 +229,7 @@ def load_blocks() -> gpd.GeoDataFrame:
     """Return all community development blocks, normalised.
 
     Columns: ``name``, ``name_key``, ``lgd``, ``district``, ``district_key``,
-    ``district_lgd``, ``state``, ``state_key``, ``geometry``.
+    ``district_lgd``, ``state``, ``state_key``, ``state_lgd``, ``geometry``.
     """
     frame = _read("blocks")
     out = gpd.GeoDataFrame(
@@ -232,6 +239,7 @@ def load_blocks() -> gpd.GeoDataFrame:
             "district": frame["district"].astype(str).str.strip(),
             "district_lgd": frame["dist_lgd"],
             "state": frame["state"].astype(str).str.strip(),
+            "state_lgd": frame["state_lgd"],
             "geometry": frame.geometry,
         },
         crs=frame.crs,
@@ -260,6 +268,7 @@ def load_subdistricts() -> gpd.GeoDataFrame:
             "district": frame["dtname"].astype(str).str.strip(),
             "district_lgd": frame["dist_lgd"],
             "state": frame["stname"].astype(str).str.strip(),
+            "state_lgd": frame["state_lgd"],
             "geometry": frame.geometry,
         },
         crs=frame.crs,
@@ -268,6 +277,36 @@ def load_subdistricts() -> gpd.GeoDataFrame:
     out["district_key"] = out["district"].map(name_key)
     out["state_key"] = out["state"].map(name_key)
     return out
+
+
+def _subdistrict_source(district_geometry) -> gpd.GeoDataFrame:
+    """Sub-districts to search, narrowed to the relevant state where possible.
+
+    A district carved out of a neighbour can draw tehsils from either, so this
+    keeps every state whose extent touches the district rather than guessing
+    one. Falls back to the national layer when the cache is not built.
+    """
+    from . import cache as cache_module
+
+    index = cache_module.read_index()
+    if index is None:
+        return load_subdistricts()
+
+    states = load_states()
+    touching = states.iloc[states.sindex.query(district_geometry, predicate="intersects")]
+    frames = []
+    for state_lgd in touching["lgd"].astype("int64").unique():
+        frame = cache_module.read_subdistricts(int(state_lgd))
+        if frame is not None and len(frame):
+            frames.append(frame)
+
+    if not frames:
+        return load_subdistricts()
+    if len(frames) == 1:
+        return frames[0]
+    return gpd.GeoDataFrame(
+        pd.concat(frames, ignore_index=True), crs=frames[0].crs
+    )
 
 
 def subdistricts_within(district_geometry, *, min_overlap: float = 0.5):
@@ -284,7 +323,7 @@ def subdistricts_within(district_geometry, *, min_overlap: float = 0.5):
     inside the district. Returns the selection and the fraction of the
     district those pieces cover, which the caller reports to the user.
     """
-    subdistricts = load_subdistricts()
+    subdistricts = _subdistrict_source(district_geometry)
     candidates = subdistricts.iloc[
         subdistricts.sindex.query(district_geometry, predicate="intersects")
     ].copy()
@@ -317,7 +356,16 @@ def districts_of(state_lgd) -> gpd.GeoDataFrame:
     state layer writes "DADRA & NAGAR HAVELI & DAMAN & DIU" where the district
     layer writes "DADRA,NAGAR HAVELI,DAMAN & DIU" - and a name match silently
     returns nothing. All 785 districts match a state by code.
+
+    Reads the one state's file from the prepared cache when there is one, so a
+    map of one district never pulls the whole country into memory.
     """
+    from . import cache as cache_module
+
+    cached = cache_module.read_districts(state_lgd)
+    if cached is not None:
+        return cached.copy()
+
     districts = load_districts()
     return districts[districts["state_lgd"].astype("int64") == int(state_lgd)].copy()
 
@@ -327,7 +375,19 @@ def blocks_of(district_lgd) -> gpd.GeoDataFrame:
 
     Matching on the code rather than the name avoids every spelling problem and
     is the reason the district layer and the block layer can be joined reliably.
+
+    Reads one state's file from the prepared cache when there is one.
     """
+    from . import cache as cache_module
+
+    state_lgd = cache_module.state_of_district(district_lgd)
+    if state_lgd is not None:
+        cached = cache_module.read_blocks(state_lgd)
+        if cached is not None:
+            return cached[
+                cached["district_lgd"].astype("int64") == int(district_lgd)
+            ].copy()
+
     blocks = load_blocks()
     return blocks[blocks["district_lgd"] == district_lgd].copy()
 

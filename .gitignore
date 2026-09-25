@@ -1,10 +1,14 @@
 # Rendered maps - regenerate them, do not commit them
 output/
 
-# Large raw downloads. SOURCES.md records how to fetch these again.
+# Large raw downloads. SOURCES.md records how to fetch these again, and
+# `python -m locator prepare` turns them into data/processed.
 data/raw/
-data/processed/*.gpkg
-data/processed/*.parquet
+
+# data/processed IS committed. It is the per-state cache the app actually
+# reads: about 100 MB, derived from the raw files and rebuildable at any time.
+# Committing it is what lets the app be deployed without a 1.5 GB preparation
+# step, and what keeps it under the memory a hosted app is allowed.
 
 # Python
 .venv/
