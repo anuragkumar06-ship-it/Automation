@@ -18,7 +18,7 @@ import pandas as pd
 import streamlit as st
 
 from locator import data as data_module
-from locator import theme
+from locator import geocode, theme
 from locator.cli import run_from_config
 from locator.names import display
 from locator.validate import INFO
@@ -177,12 +177,80 @@ with st.sidebar:
             [
                 {
                     "name": "Government Rajaji Hospital (GRH)",
-                    "lat": 9.9195,
-                    "lon": 78.1193,
+                    "lat": 9.9270866,
+                    "lon": 78.1304238,
                     "type": "hospital",
                 }
             ]
         )
+    st.session_state.setdefault("sites_rev", 0)
+    st.session_state.setdefault("geo_results", [])
+
+    # ---- look a place up rather than typing coordinates ------------------
+    with st.expander("Find a place by name", expanded=False):
+        st.markdown(
+            '<div class="cf-caption">Searches OpenStreetMap and shows what it '
+            "matched, with the address, so you can check it is the right place "
+            "before adding it. If it does not know the place it says so — it "
+            "never guesses a coordinate.</div>",
+            unsafe_allow_html=True,
+        )
+        query = st.text_input(
+            "Name of the place",
+            key="geo_query",
+            placeholder="Government Rajaji Hospital",
+        )
+        found_type = st.selectbox("Mark it as", SITE_TYPES, key="geo_type")
+
+        if st.button("Search", use_container_width=True, key="geo_search"):
+            if not query.strip():
+                st.session_state.geo_results = []
+                st.warning("Type a place name first.")
+            else:
+                try:
+                    with st.spinner(f"Looking for “{query}” in {district_name}..."):
+                        st.session_state.geo_results = geocode.search(
+                            query, near=f"{district_name}, {state_name}", limit=5
+                        )
+                except geocode.GeocodeError as exc:
+                    st.session_state.geo_results = []
+                    st.error(str(exc))
+
+        results = st.session_state.geo_results
+        if results:
+            chosen = st.radio(
+                f"{len(results)} match(es) — pick the right one",
+                options=list(range(len(results))),
+                format_func=lambda i: results[i].label(),
+                key="geo_choice",
+            )
+            if st.button("Add to sites", type="primary", use_container_width=True):
+                place = results[chosen]
+                st.session_state.sites = pd.concat(
+                    [
+                        st.session_state.sites,
+                        pd.DataFrame(
+                            [
+                                {
+                                    "name": query.strip() or place.name,
+                                    "lat": place.lat,
+                                    "lon": place.lon,
+                                    "type": found_type,
+                                }
+                            ]
+                        ),
+                    ],
+                    ignore_index=True,
+                )
+                st.session_state.sites_rev += 1
+                st.session_state.geo_results = []
+                st.rerun()
+        elif st.session_state.get("geo_search"):
+            st.info(
+                "No match. That often means the place is not in OpenStreetMap "
+                "rather than that it does not exist — small rural facilities "
+                "frequently are not. Type the coordinates in below instead."
+            )
 
     sites_table = st.data_editor(
         st.session_state.sites,
@@ -194,8 +262,10 @@ with st.sidebar:
             "lon": st.column_config.NumberColumn("Lon", format="%.5f"),
             "type": st.column_config.SelectboxColumn("Type", options=SITE_TYPES),
         },
-        key="sites_editor",
+        key=f"sites_editor_{st.session_state.sites_rev}",
     )
+    # Hold on to whatever is in the table so a search does not discard edits.
+    st.session_state.sites = sites_table
 
     st.divider()
     with st.expander("Titles and output"):
@@ -365,6 +435,7 @@ st.markdown(
     '<div class="cf-caption">Boundaries: Survey of India (states); Local Government '
     "Directory via BharatMaps (districts, blocks and sub-districts). Sources, licences "
     "and the date each was checked are recorded in <code>data/SOURCES.md</code>.<br>"
+    "Place search: OpenStreetMap contributors, via Nominatim (ODbL).<br>"
     "Cognizant Foundation India logo used under the communication guidelines: approval "
     "is required for each use.</div>",
     unsafe_allow_html=True,

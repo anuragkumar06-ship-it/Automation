@@ -76,3 +76,50 @@ class TestAliasTable:
     def test_level_is_respected(self):
         canonical, hit = self.build().resolve("district", "Thirumangalam")
         assert hit is None
+
+
+class TestGeocoderContract:
+    """The geocoder must never invent a coordinate.
+
+    These check the shape of the contract without touching the network; the
+    live behaviour is exercised by hand because it depends on a third-party
+    service that must not be hammered by a test suite.
+    """
+
+    def test_an_empty_query_returns_nothing_without_asking(self):
+        from locator.geocode import search
+
+        assert search("") == []
+        assert search("   ") == []
+
+    def test_a_place_carries_the_record_it_came_from(self):
+        from locator.geocode import Place
+
+        place = Place(
+            name="Government Rajaji Hospital",
+            address="Government Rajaji Hospital, Panagal Salai, Madurai",
+            lat=9.9270866,
+            lon=78.1304238,
+            kind="hospital",
+            osm_id="way/123",
+            importance=0.4,
+        )
+        label = place.label()
+        assert "Madurai" in label
+        assert "hospital" in label
+        assert "9.92709" in label
+
+    def test_the_rate_limit_is_at_least_one_second(self):
+        from locator import geocode
+
+        assert geocode.MIN_INTERVAL_SECONDS >= 1.0
+
+    def test_it_identifies_itself_as_nominatim_policy_requires(self):
+        from locator import geocode
+
+        assert "locator-maps" in geocode.USER_AGENT
+
+    def test_attribution_names_openstreetmap(self):
+        from locator.geocode import attribution
+
+        assert "OpenStreetMap" in attribution()
