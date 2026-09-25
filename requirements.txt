@@ -1,13 +1,16 @@
-# Locator map generator - runtime dependencies
-# All free and open source. No paid API keys anywhere.
+# Locator map generator - runtime dependencies.
+# All free and open source. No paid API keys anywhere, and nothing here calls
+# a language model or an image generator.
 
 geopandas>=1.0,<2.0      # vector data handling
 shapely>=2.0,<3.0        # geometry operations
 pyproj>=3.6              # projections
-pyogrio>=0.8             # fast vector I/O (GeoPackage, shapefile)
+pyarrow>=15.0            # reads the GeoParquet boundary files, including zstd
 matplotlib>=3.8          # rendering
-adjustText>=1.1          # label collision avoidance
+adjustText>=1.1          # label placement
 PyYAML>=6.0              # config and brand files
-pandas>=2.0              # tabular data (LGD registers, aliases)
-requests>=2.31           # downloading open datasets
-streamlit>=1.40         # the dashboard
+pandas>=2.0              # tabular data (indexes, aliases, the sites table)
+streamlit>=1.40          # the dashboard
+
+# Place-name search uses urllib from the standard library against Nominatim,
+# so it adds no dependency of its own.

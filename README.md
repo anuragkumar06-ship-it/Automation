@@ -155,6 +155,26 @@ python -m locator render maps/your-file.yaml
 
 The finished files appear in `output/`, in a folder named after `output_name`.
 
+### Finding a site by name
+
+In the dashboard, open **Find a place by name** under Sites, type the name and
+press Search. It looks the name up in OpenStreetMap and shows you what it
+matched, with the full address and what kind of place it is, so you can check
+it is the right one before adding it.
+
+It is a database lookup, not an AI. If it does not know the place it tells you
+so rather than guessing a coordinate. Small rural facilities are often not in
+OpenStreetMap, so when that happens, type the coordinates in by hand as below.
+
+**Why not ask an AI for coordinates?** Because an AI gives you a plausible
+answer rather than a looked-up one, and plausible is the dangerous kind. A
+hospital placed 1.5 km from where it really is still falls inside the right
+district and the right block, so every check in this tool passes and the map is
+wrong with nothing to show for it. That is not a hypothetical: the coordinate
+originally in `maps/madurai.yaml` was written from memory, sat 1,482 m from the
+real hospital, and passed all five checks. A gazetteer either knows a place or
+says nothing.
+
 ### Getting the coordinates for a site
 
 1. Find the place in [Google Maps](https://maps.google.com).
@@ -336,6 +356,16 @@ Every map prints a source line along the bottom.
 
 ---
 
+## Sharing it with your team
+
+See [`DEPLOY.md`](DEPLOY.md). In short: the dashboard runs on Streamlit
+Community Cloud for free from a public GitHub repository, and a full render
+peaks at about 370 MB against the 1 GB that allows. Read the three points at the
+top of that file before you push — one of them is that the repository, and the
+Cognizant Foundation logo in it, will be public.
+
+---
+
 ## For developers
 
 ```
@@ -347,6 +377,12 @@ locator/
   render.py     the three-panel figure
   cli.py        command line, and the entry point Colab calls
 ```
+
+The boundary data is split into one file per state by
+`python -m locator prepare`, and `data/processed/` is committed. That is what
+keeps a render at 370 MB instead of the 1,072 MB the national layers take, which
+is over what a hosted app is allowed. District and block geometry is copied
+through that step unchanged.
 
 Run the tests with:
 
