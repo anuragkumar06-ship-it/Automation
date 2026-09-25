@@ -9,8 +9,12 @@ blocks: [Madurai West]   # the block Government Rajaji Hospital actually falls i
 
 sites:
   - name: Government Rajaji Hospital (GRH)
-    lat: 9.9195
-    lon: 78.1193
+    # Looked up 2026-09-25 against OpenStreetMap, which returns the hospital
+    # as an amenity=hospital record at Panagal Salai, Goripalayam, Madurai.
+    # The value here before was typed from memory and sat 1,482 m away - close
+    # enough to pass every validation check, and still wrong.
+    lat: 9.9270866
+    lon: 78.1304238
     type: hospital
 
 title: null            # leave null to build the title from state and district

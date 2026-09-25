@@ -16,7 +16,15 @@ pytestmark = pytest.mark.skipif(
     reason="boundary data not downloaded; run `python -m locator fetch` first",
 )
 
-GRH = {"name": "Government Rajaji Hospital (GRH)", "lat": 9.9195, "lon": 78.1193, "type": "hospital"}
+# Looked up against OpenStreetMap, not typed from memory. An earlier value
+# here was 1,482 m out and passed every check, which is the whole reason the
+# project treats a plausible coordinate as more dangerous than a wrong one.
+GRH = {
+    "name": "Government Rajaji Hospital (GRH)",
+    "lat": 9.9270866,
+    "lon": 78.1304238,
+    "type": "hospital",
+}
 
 
 @pytest.fixture(scope="module")
