@@ -11,9 +11,27 @@ from locator import data as data_module
 from locator.names import load_aliases
 from locator.validate import validate_request
 
+def _boundaries_available() -> bool:
+    """Whether these tests can run at all.
+
+    The prepared cache is enough - that is all a deployment ships, and all the
+    app reads. Falling back to the raw files covers a checkout that has not
+    been prepared yet. Checking only for raw files, as this used to, meant the
+    whole suite skipped itself on a fresh clone while still reporting success.
+    """
+    from locator import cache as cache_module
+
+    if cache_module.cache_is_ready():
+        return True
+    return all(data_module.raw_path(k).exists() for k in ("states", "districts", "blocks"))
+
+
 pytestmark = pytest.mark.skipif(
-    not all(data_module.raw_path(k).exists() for k in data_module.DATASETS),
-    reason="boundary data not downloaded; run `python -m locator fetch` first",
+    not _boundaries_available(),
+    reason=(
+        "no boundary data: run `python -m locator fetch` then "
+        "`python -m locator prepare`"
+    ),
 )
 
 # Looked up against OpenStreetMap, not typed from memory. An earlier value
