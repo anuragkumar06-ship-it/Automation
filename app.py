@@ -26,6 +26,10 @@ from locator.validate import INFO
 PROJECT_ROOT = Path(__file__).resolve().parent
 SITE_TYPES = ["hospital", "school", "camp"]
 
+# Bump this whenever the sites table's shape or its defaults change, so open
+# browser sessions do not carry stale rows across the change.
+SITES_SCHEMA = 2
+
 
 # --------------------------------------------------------------------------
 # data, loaded once and kept for the life of the server
@@ -178,6 +182,15 @@ with st.sidebar:
     # The table starts empty. It used to be seeded with a hospital in Madurai,
     # which then followed the user into every other district and failed the
     # "is this site inside the district?" check every time.
+    #
+    # The version number matters. Streamlit keeps session_state across a code
+    # reload, so a browser tab open from before that change still held the
+    # seeded row and kept failing in exactly the way the change was meant to
+    # stop. Bumping this resets those tabs once.
+    if st.session_state.get("sites_schema") != SITES_SCHEMA:
+        st.session_state.sites = sites_module.empty_sites()
+        st.session_state.sites_schema = SITES_SCHEMA
+        st.session_state.pop("pending_site", None)
     if "sites" not in st.session_state:
         st.session_state.sites = sites_module.empty_sites()
     st.session_state.setdefault("sites_rev", 0)
