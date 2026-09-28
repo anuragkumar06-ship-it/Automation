@@ -29,9 +29,33 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 
-__all__ = ["Place", "GeocodeError", "search", "attribution"]
+__all__ = ["Place", "GeocodeError", "search", "attribution", "provider", "PROVIDERS"]
 
 ENDPOINT = "https://nominatim.openstreetmap.org/search"
+GOOGLE_ENDPOINT = "https://places.googleapis.com/v1/places:searchText"
+
+PROVIDERS = ("openstreetmap", "google")
+
+
+def provider() -> str:
+    """Which lookup service to use.
+
+    OpenStreetMap by default: free, no key, nothing to bill. Google Places is
+    better on small Indian facilities but needs a billing account and an API
+    key, so it is opt-in through the environment:
+
+        set LOCATOR_GEOCODER=google
+        set GOOGLE_MAPS_API_KEY=...
+
+    The key is only ever read from the environment, never from a file in the
+    repository, so it cannot be committed by accident.
+    """
+    import os
+
+    choice = os.environ.get("LOCATOR_GEOCODER", "openstreetmap").strip().lower()
+    if choice == "google" and os.environ.get("GOOGLE_MAPS_API_KEY"):
+        return "google"
+    return "openstreetmap"
 
 # Nominatim's policy asks for an identifying User-Agent and at most one request
 # per second. Both are honoured here so no caller has to remember to.
@@ -66,11 +90,26 @@ class Place:
     kind: str
     osm_id: str
     importance: float
+    inside: bool | None = None  # set by the caller once it tests the district
+
+    def with_inside(self, inside: bool) -> "Place":
+        """A copy marked as falling inside, or outside, the target district."""
+        return Place(
+            name=self.name,
+            address=self.address,
+            lat=self.lat,
+            lon=self.lon,
+            kind=self.kind,
+            osm_id=self.osm_id,
+            importance=self.importance,
+            inside=inside,
+        )
 
     def label(self) -> str:
         """A single line a person can read to judge whether this is the right place."""
         kind = self.kind.replace("_", " ")
-        return f"{self.address}  ·  {kind}  ·  {self.lat:.5f}, {self.lon:.5f}"
+        flag = "" if self.inside is not False else "OUTSIDE the district  ·  "
+        return f"{flag}{self.address}  ·  {kind}  ·  {self.lat:.5f}, {self.lon:.5f}"
 
     def short_label(self) -> str:
         head = self.address.split(",")[0].strip() or self.name
@@ -93,17 +132,32 @@ def search(
     limit: int = 5,
     country: str = "in",
     near: str | None = None,
+    bbox: tuple[float, float, float, float] | None = None,
+    bounded: bool = True,
 ) -> list[Place]:
     """Search the gazetteer for ``query`` and return what it matched.
 
-    ``near`` is appended to the query to narrow it, which is how a district or
-    state name is used to disambiguate a common facility name. Returns an empty
-    list when the search ran but matched nothing. Raises :class:`GeocodeError`
-    when the search could not be carried out at all.
+    ``bbox`` is ``(min_lon, min_lat, max_lon, max_lat)`` around the area being
+    mapped. With ``bounded`` set, results outside it are discarded by the
+    service rather than ranked lower, which is the difference between useful
+    and useless here: searching "Raghunath Bazar" while mapping Jammu district
+    returns temples in Srinagar and a street in Mumbai without it, and nothing
+    at all with it - the honest answer, because that name is not in the
+    database anywhere near Jammu.
+
+    ``near`` appends place names to the query instead. It is a far weaker
+    filter and is kept only for the widened second search, where the caller
+    wants matches from beyond the district and labels them as such.
+
+    Returns an empty list when the search ran and matched nothing. Raises
+    :class:`GeocodeError` only when the search could not be carried out.
     """
     query = (query or "").strip()
     if not query:
         return []
+
+    if provider() == "google":
+        return _search_google(query, limit=limit, near=near, bbox=bbox, bounded=bounded)
 
     full_query = f"{query}, {near}".strip(", ") if near else query
     params = {
@@ -114,6 +168,12 @@ def search(
     }
     if country:
         params["countrycodes"] = country
+    if bbox:
+        min_lon, min_lat, max_lon, max_lat = bbox
+        # Nominatim takes two opposite corners, as west,north,east,south.
+        params["viewbox"] = f"{min_lon},{max_lat},{max_lon},{min_lat}"
+        if bounded:
+            params["bounded"] = "1"
 
     url = f"{ENDPOINT}?{urllib.parse.urlencode(params)}"
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
@@ -169,6 +229,92 @@ def _to_place(row: dict) -> Place | None:
     )
 
 
+def _search_google(query, *, limit, near, bbox, bounded):
+    """The same search against Google Places, when a key is configured.
+
+    Google's coverage of small Indian facilities is better than OpenStreetMap's.
+    It is still a lookup, not a generator: it returns places that exist in
+    Google's index, or nothing. A bounding box is passed as a location bias, or
+    as a hard restriction when ``bounded`` is set.
+    """
+    import os
+
+    key = os.environ.get("GOOGLE_MAPS_API_KEY", "")
+    if not key:
+        raise GeocodeError(
+            "Google place search is selected but GOOGLE_MAPS_API_KEY is not set. "
+            "Set it, or unset LOCATOR_GEOCODER to use OpenStreetMap."
+        )
+
+    body: dict = {
+        "textQuery": f"{query}, {near}".strip(", ") if near else query,
+        "maxResultCount": max(1, min(int(limit), 20)),
+        "regionCode": "IN",
+    }
+    if bbox:
+        min_lon, min_lat, max_lon, max_lat = bbox
+        area = {
+            "rectangle": {
+                "low": {"latitude": min_lat, "longitude": min_lon},
+                "high": {"latitude": max_lat, "longitude": max_lon},
+            }
+        }
+        body["locationRestriction" if bounded else "locationBias"] = area
+
+    request = urllib.request.Request(
+        GOOGLE_ENDPOINT,
+        data=json.dumps(body).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": key,
+            "X-Goog-FieldMask": (
+                "places.displayName,places.formattedAddress,places.location,places.types"
+            ),
+            "User-Agent": USER_AGENT,
+        },
+    )
+
+    _respect_rate_limit()
+    try:
+        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "ignore")[:200]
+        raise GeocodeError(
+            f"Google place search refused the request ({exc.code}). Check the API "
+            f"key and that the Places API is enabled. {detail}"
+        ) from exc
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+        raise GeocodeError(
+            "Could not reach Google place search. Check the internet connection, "
+            "or type the coordinates in by hand."
+        ) from exc
+
+    places = []
+    for row in payload.get("places", []):
+        location = row.get("location") or {}
+        try:
+            lat = float(location["latitude"])
+            lon = float(location["longitude"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        kinds = row.get("types") or ["place"]
+        places.append(
+            Place(
+                name=(row.get("displayName") or {}).get("text", "").strip(),
+                address=str(row.get("formattedAddress") or "").strip(),
+                lat=lat,
+                lon=lon,
+                kind=str(kinds[0]),
+                osm_id="",
+                importance=0.0,
+            )
+        )
+    return places
+
+
 def attribution() -> str:
-    """The credit OpenStreetMap's licence requires wherever its data is shown."""
+    """The credit the licence of whichever service is in use requires."""
+    if provider() == "google":
+        return "Place search: Google Places."
     return "Place search: OpenStreetMap contributors, via Nominatim (ODbL)."

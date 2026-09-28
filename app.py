@@ -18,21 +18,13 @@ import pandas as pd
 import streamlit as st
 
 from locator import data as data_module
-from locator import geocode, theme
+from locator import geocode, sites as sites_module, theme
 from locator.cli import run_from_config
 from locator.names import display
 from locator.validate import INFO
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 SITE_TYPES = ["hospital", "school", "camp"]
-
-st.set_page_config(
-    page_title="Locator map generator | Cognizant Foundation India",
-    page_icon=str(theme.LOGO_PATH) if theme.LOGO_PATH.exists() else "🗺️",
-    layout="wide",
-)
-
-st.markdown(theme.css(), unsafe_allow_html=True)
 
 
 # --------------------------------------------------------------------------
@@ -69,6 +61,17 @@ def _state_options() -> list[tuple[str, int]]:
 def _district_options(state_lgd: int) -> list[tuple[str, int]]:
     districts = data_module.districts_of(state_lgd)
     return sorted((display(r["name"]), int(r["lgd"])) for _, r in districts.iterrows())
+
+
+@st.cache_resource(show_spinner=False)
+def _district_shape(state_lgd: int, district_lgd: int):
+    """The district polygon and its bounding box, used to aim the search."""
+    districts = data_module.districts_of(state_lgd)
+    match = districts[districts["lgd"].astype("int64") == int(district_lgd)]
+    if match.empty:
+        return None, None
+    geometry = match.iloc[0]["geometry"]
+    return geometry, tuple(float(v) for v in geometry.bounds)
 
 
 @st.cache_data(show_spinner=False)
@@ -172,19 +175,14 @@ with st.sidebar:
         "of the menu. The first number is lat, the second is lon."
     )
 
+    # The table starts empty. It used to be seeded with a hospital in Madurai,
+    # which then followed the user into every other district and failed the
+    # "is this site inside the district?" check every time.
     if "sites" not in st.session_state:
-        st.session_state.sites = pd.DataFrame(
-            [
-                {
-                    "name": "Government Rajaji Hospital (GRH)",
-                    "lat": 9.9270866,
-                    "lon": 78.1304238,
-                    "type": "hospital",
-                }
-            ]
-        )
+        st.session_state.sites = sites_module.empty_sites()
     st.session_state.setdefault("sites_rev", 0)
     st.session_state.setdefault("geo_results", [])
+    st.session_state.setdefault("geo_widened", False)
 
     # ---- look a place up rather than typing coordinates ------------------
     with st.expander("Find a place by name", expanded=False):
@@ -202,16 +200,45 @@ with st.sidebar:
         )
         found_type = st.selectbox("Mark it as", SITE_TYPES, key="geo_type")
 
+        wider = st.checkbox(
+            "Search beyond this district",
+            value=False,
+            key="geo_wider",
+            help=(
+                "Off, only places inside the district are offered, which is what "
+                "stops a search for a place in Jammu returning one in Srinagar. "
+                "Turn it on if the site genuinely sits just outside."
+            ),
+        )
+
         if st.button("Search", use_container_width=True, key="geo_search"):
             if not query.strip():
                 st.session_state.geo_results = []
                 st.warning("Type a place name first.")
             else:
+                shape, bbox = _district_shape(state_lgd, district_lgd)
                 try:
                     with st.spinner(f"Looking for “{query}” in {district_name}..."):
-                        st.session_state.geo_results = geocode.search(
-                            query, near=f"{district_name}, {state_name}", limit=5
-                        )
+                        if wider:
+                            found = geocode.search(
+                                query,
+                                near=f"{district_name}, {state_name}",
+                                limit=8,
+                            )
+                        else:
+                            found = geocode.search(query, bbox=bbox, bounded=True, limit=8)
+
+                    # The bounding box is a rectangle; the district is not. Test
+                    # every candidate against the real shape and say which is
+                    # which, rather than trusting the box.
+                    if shape is not None:
+                        from shapely.geometry import Point
+
+                        found = [p.with_inside(shape.contains(Point(p.lon, p.lat))) for p in found]
+                        found.sort(key=lambda p: (not p.inside, -p.importance))
+
+                    st.session_state.geo_results = found
+                    st.session_state.geo_widened = wider
                 except geocode.GeocodeError as exc:
                     st.session_state.geo_results = []
                     st.error(str(exc))
@@ -226,31 +253,28 @@ with st.sidebar:
             )
             if st.button("Add to sites", type="primary", use_container_width=True):
                 place = results[chosen]
-                st.session_state.sites = pd.concat(
-                    [
-                        st.session_state.sites,
-                        pd.DataFrame(
-                            [
-                                {
-                                    "name": query.strip() or place.name,
-                                    "lat": place.lat,
-                                    "lon": place.lon,
-                                    "type": found_type,
-                                }
-                            ]
-                        ),
-                    ],
-                    ignore_index=True,
-                )
-                st.session_state.sites_rev += 1
+                st.session_state.pending_site = {
+                    "name": query.strip() or place.name,
+                    "lat": place.lat,
+                    "lon": place.lon,
+                    "type": found_type,
+                }
                 st.session_state.geo_results = []
                 st.rerun()
         elif st.session_state.get("geo_search"):
-            st.info(
-                "No match. That often means the place is not in OpenStreetMap "
-                "rather than that it does not exist — small rural facilities "
-                "frequently are not. Type the coordinates in below instead."
-            )
+            if st.session_state.get("geo_widened"):
+                st.info(
+                    "No match anywhere in India. The place is very likely not in "
+                    "OpenStreetMap under that name — small rural facilities often "
+                    "are not. Type the coordinates in below instead."
+                )
+            else:
+                st.info(
+                    f"No match inside {district_name} district. That usually means "
+                    f"OpenStreetMap does not hold that name here, not that the place "
+                    f"does not exist. Try a nearby landmark, tick “Search beyond this "
+                    f"district”, or type the coordinates in below."
+                )
 
     sites_table = st.data_editor(
         st.session_state.sites,
@@ -264,8 +288,60 @@ with st.sidebar:
         },
         key=f"sites_editor_{st.session_state.sites_rev}",
     )
-    # Hold on to whatever is in the table so a search does not discard edits.
-    st.session_state.sites = sites_table
+    # Say, per row, whether it falls in the district being mapped. Sites stay
+    # in the table when the district changes, which is usually what you want,
+    # but it meant a leftover site from another district failed the check and
+    # the message named that row while the user was looking at the one they
+    # had just added.
+    _checked, _problems = sites_module.sites_from_table(sites_table)
+    if _checked:
+        shape, _ = _district_shape(state_lgd, district_lgd)
+        if shape is not None:
+            from shapely.geometry import Point
+
+            strays = [
+                site for site in _checked
+                if not shape.contains(Point(site["lon"], site["lat"]))
+            ]
+            if strays:
+                names = ", ".join(s["name"] for s in strays)
+                st.warning(
+                    f"{len(strays)} site(s) are not inside {district_name} district: "
+                    f"{names}. They are probably left over from another district."
+                )
+                if st.button(
+                    f"Remove the {len(strays)} site(s) outside {district_name}",
+                    use_container_width=True,
+                    key="drop_strays",
+                ):
+                    keep = [s for s in _checked if s not in strays]
+                    st.session_state.sites = (
+                        pd.DataFrame(keep) if keep else sites_module.empty_sites()
+                    )
+                    st.session_state.sites_rev += 1
+                    st.rerun()
+            else:
+                st.caption(
+                    f"All {len(_checked)} site(s) fall inside {district_name} district."
+                )
+    for _problem in _problems:
+        st.warning(_problem)
+
+    # A site picked from the search is merged into whatever is in the table
+    # right now, so adding one never discards rows typed by hand.
+    pending = st.session_state.pop("pending_site", None)
+    if pending is not None:
+        st.session_state.sites = pd.concat(
+            [sites_table, pd.DataFrame([pending])], ignore_index=True
+        )
+        st.session_state.sites_rev += 1
+        st.rerun()
+
+    # Deliberately NOT written back to st.session_state.sites on every run.
+    # st.data_editor tracks edits as a delta against the frame it was given,
+    # so replacing that frame underneath a live widget key made rows double
+    # up, revert or vanish. The stored frame is the seed; it only changes when
+    # we add a row ourselves, and the key is bumped when it does.
 
     st.divider()
     with st.expander("Titles and output"):
@@ -292,21 +368,9 @@ with st.sidebar:
 
 
 def _build_config() -> dict:
-    sites = []
-    for row in sites_table.to_dict("records"):
-        name = str(row.get("name") or "").strip()
-        if not name:
-            continue
-        if pd.isna(row.get("lat")) or pd.isna(row.get("lon")):
-            continue
-        sites.append(
-            {
-                "name": name,
-                "lat": float(row["lat"]),
-                "lon": float(row["lon"]),
-                "type": str(row.get("type") or "hospital"),
-            }
-        )
+    sites, problems = sites_module.sites_from_table(sites_table)
+    for problem in problems:
+        st.warning(problem)
     return {
         "state": state_name,
         "district": district_name,

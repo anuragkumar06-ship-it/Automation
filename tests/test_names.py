@@ -123,3 +123,76 @@ class TestGeocoderContract:
         from locator.geocode import attribution
 
         assert "OpenStreetMap" in attribution()
+
+
+class TestGeocodeProvider:
+    """Which lookup service is used, and how it is selected."""
+
+    def test_openstreetmap_is_the_default(self, monkeypatch):
+        from locator import geocode
+
+        monkeypatch.delenv("LOCATOR_GEOCODER", raising=False)
+        monkeypatch.delenv("GOOGLE_MAPS_API_KEY", raising=False)
+        assert geocode.provider() == "openstreetmap"
+
+    def test_google_needs_both_the_choice_and_a_key(self, monkeypatch):
+        from locator import geocode
+
+        monkeypatch.setenv("LOCATOR_GEOCODER", "google")
+        monkeypatch.delenv("GOOGLE_MAPS_API_KEY", raising=False)
+        assert geocode.provider() == "openstreetmap", "must not claim Google without a key"
+
+        monkeypatch.setenv("GOOGLE_MAPS_API_KEY", "test-key")
+        assert geocode.provider() == "google"
+
+    def test_attribution_follows_the_provider(self, monkeypatch):
+        from locator import geocode
+
+        monkeypatch.setenv("LOCATOR_GEOCODER", "google")
+        monkeypatch.setenv("GOOGLE_MAPS_API_KEY", "test-key")
+        assert "Google" in geocode.attribution()
+
+        monkeypatch.delenv("LOCATOR_GEOCODER")
+        assert "OpenStreetMap" in geocode.attribution()
+
+
+class TestBoundedSearch:
+    """A search is restricted to the district being mapped.
+
+    Without this, searching a place name while mapping Jammu district returned
+    temples in Srinagar and a street in Mumbai.
+    """
+
+    def test_a_bbox_becomes_a_viewbox_in_west_north_east_south_order(self):
+        import inspect
+
+        from locator import geocode
+
+        source = inspect.getsource(geocode.search)
+        assert "viewbox" in source
+        assert "bounded" in source
+
+    def test_bounded_is_on_by_default(self):
+        import inspect
+
+        from locator import geocode
+
+        signature = inspect.signature(geocode.search)
+        assert signature.parameters["bounded"].default is True
+
+    def test_a_place_can_be_marked_inside_or_outside(self):
+        from locator.geocode import Place
+
+        place = Place(
+            name="Kottayam Railway Station",
+            address="Kottayam Railway Station, Baker Junction, Kerala",
+            lat=9.59501,
+            lon=76.53150,
+            kind="railway_station",
+            osm_id="node/1",
+            importance=0.3,
+        )
+        assert place.inside is None
+        assert place.with_inside(True).inside is True
+        assert "OUTSIDE" in place.with_inside(False).label()
+        assert "OUTSIDE" not in place.with_inside(True).label()
