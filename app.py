@@ -18,7 +18,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from locator import data as data_module
+from locator import cache as cache_module, data as data_module
 from locator import geocode, sites as sites_module, theme
 from locator.cli import run_from_config
 from locator.names import display
@@ -51,33 +51,52 @@ SITES_SCHEMA = 2
 # --------------------------------------------------------------------------
 
 
-# The sub-district layer is large and only a handful of districts need it, so
-# it is fetched on demand rather than at startup.
+# Only the layers a given map needs are ever loaded, one state at a time.
+# Loading the national district and block layers took 1,016 MB, which is over
+# what a hosted app is allowed before the framework's own overhead - the app
+# would have been killed on its first boot.
 CORE_LAYERS = ("states", "districts", "blocks")
 
 
-@st.cache_resource(show_spinner="Loading boundary data. This happens once.")
+@st.cache_resource(show_spinner="Getting the boundary data ready. This happens once.")
 def _boundaries():
-    """Download if needed, then load the three layers every map uses."""
+    """Make sure there is boundary data to read, without reading all of it.
+
+    The prepared cache is what a deployment ships and all the app needs. Only
+    a checkout that has never been prepared falls back to downloading the raw
+    national files, which is a local-development path, not a hosted one.
+    """
+    if cache_module.cache_is_ready():
+        return True
     for key in CORE_LAYERS:
         data_module.ensure_dataset(key)
-    return (
-        data_module.load_states(),
-        data_module.load_districts(),
-        data_module.load_blocks(),
-    )
+    return True
 
 
 @st.cache_data(show_spinner=False)
 def _state_options() -> list[tuple[str, int]]:
-    states, _, _ = _boundaries()
+    """States for the dropdown, from the index: names and codes, no geometry."""
+    index = cache_module.read_index()
+    if index is not None:
+        pairs = {int(r.state_lgd): display(r.state_name) for r in index.itertuples()}
+        return sorted((name, lgd) for lgd, name in pairs.items())
+
+    states = data_module.load_states()
     real = states[~states["disputed"]]
-    pairs = sorted((display(r["name"]), int(r["lgd"])) for _, r in real.iterrows())
-    return pairs
+    return sorted((display(r["name"]), int(r["lgd"])) for _, r in real.iterrows())
 
 
 @st.cache_data(show_spinner=False)
 def _district_options(state_lgd: int) -> list[tuple[str, int]]:
+    """Districts for the dropdown, also from the index where there is one."""
+    index = cache_module.read_index()
+    if index is not None:
+        rows = index[index["state_lgd"].astype("int64") == int(state_lgd)]
+        if len(rows):
+            return sorted(
+                (display(r.district_name), int(r.dist_lgd)) for r in rows.itertuples()
+            )
+
     districts = data_module.districts_of(state_lgd)
     return sorted((display(r["name"]), int(r["lgd"])) for _, r in districts.iterrows())
 
@@ -413,6 +432,20 @@ with st.sidebar:
     check_only = st.button("Run the checks only", use_container_width=True)
 
 
+def _output_root() -> Path:
+    """A private folder per browser session.
+
+    Maps used to be written into the app's own folder, so two people rendering
+    with the same output name overwrote each other's files and could download
+    the wrong map. Each session now gets its own directory.
+    """
+    import tempfile
+
+    if "output_root" not in st.session_state:
+        st.session_state.output_root = tempfile.mkdtemp(prefix="locator-")
+    return Path(st.session_state.output_root)
+
+
 def _build_config() -> dict:
     sites, problems = sites_module.sites_from_table(sites_table)
     for problem in problems:
@@ -468,7 +501,7 @@ if check_only:
 elif go:
     config = _build_config()
     with st.spinner("Checking the names and coordinates, then drawing. About 15 seconds."):
-        outcome = run_from_config(config, force=force, output_root=PROJECT_ROOT / "output")
+        outcome = run_from_config(config, force=force, output_root=_output_root())
 
     st.subheader("Checks")
     _show_report(outcome["report"])
