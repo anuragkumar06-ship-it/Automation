@@ -12,6 +12,7 @@ Run it with:
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -244,33 +245,40 @@ with st.sidebar:
                 st.warning("Type a place name first.")
             else:
                 shape, bbox = _district_shape(state_lgd, district_lgd)
+                from shapely.geometry import Point
+
+                def _inside(lat, lon):
+                    return shape is None or shape.contains(Point(lon, lat))
+
                 try:
                     with st.spinner(f"Looking for “{query}” in {district_name}..."):
                         if wider:
                             found = geocode.search(
-                                query,
-                                near=f"{district_name}, {state_name}",
-                                limit=8,
+                                query, near=f"{district_name}, {state_name}", limit=8
                             )
+                            source, tried = "", []
                         else:
-                            found = geocode.search(query, bbox=bbox, bounded=True, limit=8)
+                            # Each service in turn until one answers, every
+                            # result checked against the district itself.
+                            found, source, tried = geocode.search_best(
+                                query, bbox=bbox, keep=_inside, limit=8
+                            )
 
-                    # The bounding box is a rectangle; the district is not. Test
-                    # every candidate against the real shape and say which is
-                    # which, rather than trusting the box.
                     if shape is not None:
-                        from shapely.geometry import Point
-
-                        found = [p.with_inside(shape.contains(Point(p.lon, p.lat))) for p in found]
+                        found = [p.with_inside(_inside(p.lat, p.lon)) for p in found]
                         found.sort(key=lambda p: (not p.inside, -p.importance))
 
                     st.session_state.geo_results = found
                     st.session_state.geo_widened = wider
+                    st.session_state.geo_source = source
+                    st.session_state.geo_tried = tried
                 except geocode.GeocodeError as exc:
                     st.session_state.geo_results = []
                     st.error(str(exc))
 
         results = st.session_state.geo_results
+        if results and st.session_state.get("geo_source"):
+            st.caption(f"Found by {st.session_state['geo_source']}.")
         if results:
             chosen = st.radio(
                 f"{len(results)} match(es) — pick the right one",
@@ -296,11 +304,20 @@ with st.sidebar:
                     "are not. Type the coordinates in below instead."
                 )
             else:
+                tried = st.session_state.get("geo_tried") or ["OpenStreetMap"]
+                has_google = bool(os.environ.get("GOOGLE_MAPS_API_KEY"))
+                extra = (
+                    ""
+                    if has_google
+                    else " Setting a Google Maps API key would add Google Places as a "
+                    "third place to look; see DEPLOY.md."
+                )
                 st.info(
-                    f"No match inside {district_name} district. That usually means "
-                    f"OpenStreetMap does not hold that name here, not that the place "
-                    f"does not exist. Try a nearby landmark, tick “Search beyond this "
-                    f"district”, or type the coordinates in below."
+                    f"No match inside {district_name} district. Tried "
+                    f"{', '.join(tried)}. That usually means none of them holds that "
+                    f"name here, not that the place does not exist. Try a nearby "
+                    f"landmark, tick “Search beyond this district”, or type the "
+                    f"coordinates in below.{extra}"
                 )
 
     sites_table = st.data_editor(

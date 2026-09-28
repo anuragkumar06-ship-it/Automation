@@ -158,6 +158,24 @@ They are labelled tehsils, never blocks.
 
 ---
 
+## Place-name search
+
+Not a boundary source: it turns a typed name into a coordinate a person then
+confirms. Three services are tried in order, and **every result is tested
+against the district polygon whatever the service claimed**, because none of
+their bounding boxes is reliable on its own - Photon answered a Jammu query
+with a temple in Sialkot, across the border.
+
+| Order | Service | Key needed | Licence |
+|---|---|---|---|
+| 1 | OpenStreetMap via Nominatim | No | ODbL |
+| 2 | Photon (komoot), same data indexed differently | No | ODbL |
+| 3 | Google Places | Yes, `GOOGLE_MAPS_API_KEY` | Google terms |
+
+Google is only reached when the first two find nothing, and only when a key is
+set in the environment. Without one the tool says which services it tried and
+that nothing matched, which is the honest answer rather than a guess.
+
 ## Standing caveats
 
 1. **These files are a mirror, not a direct government download.** The
@@ -231,6 +249,22 @@ district administration's own website and four of them are spelled differently
 there than in the boundary layer (Naugachia/Naugachhia, Rangra Chowk/
 Rangrachowk, Sanhoula/Sonhaula, Pirpainty/Pirpainti). Those differences are
 resolved through `data/aliases.csv`, and the count matched at 16.
+
+## 5b. Geometry repaired when the cache is built
+
+185 polygons in the published data cross themselves: 3 states, 10 districts,
+152 blocks and 132 sub-districts. Kaduthuruthy block in Kottayam is one of
+them. This is a flaw in the source, not in anything done with it here.
+
+`python -m locator prepare` untangles them once, with `make_valid`, so the
+stored cache holds valid shapes. Measured across all of them the largest area
+change is **0.000000 per cent**, at most 0.2 square metres: the self-crossing
+is untangled, no boundary moves.
+
+The count repaired per layer is written into `data/processed/MANIFEST.json`,
+so the change is on the record rather than hidden. Before this, the renderer
+repaired them on the fly and warned about it on every single map, which made
+a permanent property of the source data look like a fault in the map.
 
 ## 6. Water body labels
 

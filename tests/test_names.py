@@ -163,12 +163,12 @@ class TestBoundedSearch:
     temples in Srinagar and a street in Mumbai.
     """
 
-    def test_a_bbox_becomes_a_viewbox_in_west_north_east_south_order(self):
+    def test_a_bbox_becomes_a_viewbox_the_service_treats_as_a_limit(self):
         import inspect
 
         from locator import geocode
 
-        source = inspect.getsource(geocode.search)
+        source = inspect.getsource(geocode._search_nominatim)
         assert "viewbox" in source
         assert "bounded" in source
 
@@ -179,6 +179,35 @@ class TestBoundedSearch:
 
         signature = inspect.signature(geocode.search)
         assert signature.parameters["bounded"].default is True
+
+    def test_the_cascade_tries_the_free_services_before_google(self):
+        import inspect
+
+        from locator import geocode
+
+        source = inspect.getsource(geocode.search_best)
+        osm = source.index("OpenStreetMap")
+        photon = source.index("Photon")
+        google = source.index("Google Places")
+        assert osm < photon < google, "keyless services must be tried first"
+
+    def test_the_cascade_filters_every_result_through_the_caller_s_test(self):
+        """Photon's bounding box is a hint, not a limit - it answered a Jammu
+        query with a temple in Sialkot - so results must be filtered here."""
+        from locator import geocode
+
+        rejected = []
+
+        def keep(lat, lon):
+            rejected.append((lat, lon))
+            return False
+
+        found, source, tried = geocode.search_best(
+            "Raghunath Bazar", bbox=(74.3, 32.4, 75.2, 33.1), keep=keep, limit=3
+        )
+        assert found == []
+        assert source == ""
+        assert "OpenStreetMap" in tried
 
     def test_a_place_can_be_marked_inside_or_outside(self):
         from locator.geocode import Place

@@ -29,10 +29,19 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 
-__all__ = ["Place", "GeocodeError", "search", "attribution", "provider", "PROVIDERS"]
+__all__ = [
+    "Place",
+    "GeocodeError",
+    "search",
+    "search_best",
+    "attribution",
+    "provider",
+    "PROVIDERS",
+]
 
 ENDPOINT = "https://nominatim.openstreetmap.org/search"
 GOOGLE_ENDPOINT = "https://places.googleapis.com/v1/places:searchText"
+PHOTON_ENDPOINT = "https://photon.komoot.io/api/"
 
 PROVIDERS = ("openstreetmap", "google")
 
@@ -159,6 +168,21 @@ def search(
     if provider() == "google":
         return _search_google(query, limit=limit, near=near, bbox=bbox, bounded=bounded)
 
+    return _search_nominatim(
+        query, limit=limit, country=country, near=near, bbox=bbox, bounded=bounded
+    )
+
+
+def _search_nominatim(
+    query: str,
+    *,
+    limit: int = 5,
+    country: str = "in",
+    near: str | None = None,
+    bbox=None,
+    bounded: bool = True,
+) -> list[Place]:
+    """The OpenStreetMap search itself."""
     full_query = f"{query}, {near}".strip(", ") if near else query
     params = {
         "q": full_query,
@@ -311,6 +335,114 @@ def _search_google(query, *, limit, near, bbox, bounded):
             )
         )
     return places
+
+
+def _search_photon(query, *, limit, bbox):
+    """A second free service over the same OpenStreetMap data.
+
+    Photon indexes and ranks differently from Nominatim, so it sometimes finds
+    a name the other misses. Its bounding box is only a hint, not a limit - it
+    answered a Jammu query with a temple in Sialkot - so the caller must still
+    test every result against the real district.
+    """
+    params = {"q": query, "limit": str(max(1, min(int(limit), 20))), "lang": "en"}
+    if bbox:
+        min_lon, min_lat, max_lon, max_lat = bbox
+        params["bbox"] = f"{min_lon},{min_lat},{max_lon},{max_lat}"
+
+    url = f"{PHOTON_ENDPOINT}?{urllib.parse.urlencode(params)}"
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+
+    _respect_rate_limit()
+    try:
+        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError, ValueError):
+        return []  # a second opinion that cannot be reached is simply skipped
+
+    places = []
+    for feature in payload.get("features", []):
+        try:
+            lon, lat = feature["geometry"]["coordinates"][:2]
+            lat, lon = float(lat), float(lon)
+        except (KeyError, IndexError, TypeError, ValueError):
+            continue
+        fields = feature.get("properties", {}) or {}
+        parts = [
+            fields.get(k)
+            for k in ("name", "street", "district", "city", "county", "state")
+            if fields.get(k)
+        ]
+        places.append(
+            Place(
+                name=str(fields.get("name") or "").strip(),
+                address=", ".join(dict.fromkeys(parts)) or str(fields.get("name") or ""),
+                lat=lat,
+                lon=lon,
+                kind=str(fields.get("osm_value") or fields.get("type") or "place"),
+                osm_id=f"{fields.get('osm_type', '')}/{fields.get('osm_id', '')}",
+                importance=0.0,
+            )
+        )
+    return places
+
+
+def search_best(
+    query: str,
+    *,
+    bbox: tuple[float, float, float, float] | None = None,
+    keep=None,
+    limit: int = 8,
+) -> tuple[list[Place], str, list[str]]:
+    """Ask each service in turn until one returns a usable answer.
+
+    ``keep`` is a test the caller supplies - in practice "is this point inside
+    the district being mapped?" - and is applied to every result whatever the
+    service claimed, because none of these bounding boxes is trustworthy on
+    its own.
+
+    Returns the places, the name of the service that found them, and the list
+    of services tried, so the page can say where an answer came from.
+
+    Order: OpenStreetMap through Nominatim, then Photon over the same data but
+    indexed differently, then Google Places if a key is configured. Free and
+    keyless first; Google is only reached when the others found nothing.
+    """
+    tried: list[str] = []
+
+    def usable(places):
+        return [p for p in places if keep is None or keep(p.lat, p.lon)]
+
+    # 1. Nominatim, hard-bounded to the district.
+    tried.append("OpenStreetMap")
+    try:
+        found = usable(_search_nominatim(query, limit=limit, bbox=bbox, bounded=True))
+    except GeocodeError:
+        found = []
+    if found:
+        return found, "OpenStreetMap", tried
+
+    # 2. Photon, the same data indexed differently.
+    tried.append("Photon")
+    found = usable(_search_photon(query, limit=limit, bbox=bbox))
+    if found:
+        return found, "Photon", tried
+
+    # 3. Google Places, only when a key is configured.
+    import os
+
+    if os.environ.get("GOOGLE_MAPS_API_KEY"):
+        tried.append("Google Places")
+        try:
+            found = usable(
+                _search_google(query, limit=limit, near=None, bbox=bbox, bounded=True)
+            )
+        except GeocodeError:
+            found = []
+        if found:
+            return found, "Google Places", tried
+
+    return [], "", tried
 
 
 def attribution() -> str:

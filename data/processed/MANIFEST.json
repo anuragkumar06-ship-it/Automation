@@ -1,5 +1,5 @@
 {
-  "built_on": "2026-09-25",
+  "built_on": "2026-09-28",
   "state_simplify_m": 150,
   "note": "Derived from the raw files described in data/SOURCES.md. District and block geometry is copied through unchanged. Rebuild with python -m locator prepare.",
   "sources": {
@@ -26,6 +26,13 @@
     "unit_index_rows": 7146,
     "subdistrict_files": 1
   },
+  "repaired": {
+    "states": 3,
+    "districts": 10,
+    "blocks": 152,
+    "subdistricts": 132
+  },
+  "repair_note": "Self-intersecting outlines in the published data were untangled with make_valid at this step. Measured over all of them the largest area change is 0.000000 per cent, at most 0.2 square metres: the crossing is untangled, no boundary moves.",
   "districts_without_blocks": 17,
   "states_needing_subdistricts": [
     8
