@@ -68,9 +68,32 @@ labels:
   min_size_points: 9.5
 
 markers:
-  hospital: o
-  school: s
-  camp: ^
+  # The kinds of site a map can mark, and the shape each one gets.
+  #
+  # This list is what the dashboard's "Mark it as" menu offers, so adding a
+  # kind here is all it takes to make it selectable. Keep the shapes visually
+  # distinct: at the size these print, a circle and an octagon are the same
+  # thing. The names are what appear in the map's legend.
+  #
+  # Health
+  hospital: o               # circle
+  health centre: h          # hexagon - PHC, CHC, sub-centre
+  eye care centre: "*"      # star
+  maternity centre: p       # pentagon
+  rehabilitation centre: v  # triangle down
+  health camp: ^            # triangle up
+  # Education and skilling
+  school: s                 # square
+  college: D                # diamond
+  anganwadi: d              # thin diamond
+  skill centre: P           # filled plus
+  library: "8"              # octagon
+  # Everything else
+  community centre: H       # tall hexagon
+  partner office: X         # filled cross
+  other: "<"                # triangle left
+
+  # Used when a site's kind is not in the list above.
   default: o
   size: 34
 

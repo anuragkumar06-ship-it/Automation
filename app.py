@@ -24,7 +24,21 @@ from locator.names import display
 from locator.validate import INFO
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-SITE_TYPES = ["hospital", "school", "camp"]
+
+
+@st.cache_data(show_spinner=False)
+def _site_types() -> list[str]:
+    """The kinds of site on offer, read from style/brand.yaml.
+
+    Kept in the brand file rather than here so the menu and the shapes drawn
+    on the map cannot drift apart.
+    """
+    from locator.style import load_brand
+
+    return load_brand(PROJECT_ROOT / "style" / "brand.yaml").site_types
+
+
+SITE_TYPES = _site_types()
 
 # Bump this whenever the sites table's shape or its defaults change, so open
 # browser sessions do not carry stale rows across the change.
@@ -297,7 +311,9 @@ with st.sidebar:
             "name": st.column_config.TextColumn("Name", width="medium"),
             "lat": st.column_config.NumberColumn("Lat", format="%.5f"),
             "lon": st.column_config.NumberColumn("Lon", format="%.5f"),
-            "type": st.column_config.SelectboxColumn("Type", options=SITE_TYPES),
+            "type": st.column_config.SelectboxColumn(
+                "Type", options=SITE_TYPES, width="medium"
+            ),
         },
         key=f"sites_editor_{st.session_state.sites_rev}",
     )

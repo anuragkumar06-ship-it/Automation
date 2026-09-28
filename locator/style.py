@@ -124,6 +124,17 @@ class Brand:
         return markers.get((site_type or "").lower(), markers["default"])
 
     @property
+    def site_types(self) -> list[str]:
+        """The kinds of site a map can mark, in the order brand.yaml lists them.
+
+        Read from the markers block so the dashboard's menu and the shapes on
+        the map cannot drift apart: adding a kind to brand.yaml adds it to the
+        menu, with the shape written beside it.
+        """
+        reserved = {"default", "size"}
+        return [str(name) for name in self.raw["markers"] if name not in reserved]
+
+    @property
     def marker_size(self) -> float:
         return float(self.raw["markers"]["size"])
 

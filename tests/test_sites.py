@@ -69,14 +69,14 @@ class TestSitesFromTable:
 
     def test_swapped_coordinates_are_caught_and_the_swap_is_suggested(self):
         _, problems = sites_from_table(
-            table([{"name": "Swapped", "lat": 75.83, "lon": 25.18, "type": "camp"}])
+            table([{"name": "Swapped", "lat": 75.83, "lon": 25.18, "type": "health camp"}])
         )
         assert "swapped" in problems[0].lower()
         assert "25.18, 75.83" in problems[0]
 
     def test_somewhere_outside_india_is_refused(self):
         sites, problems = sites_from_table(
-            table([{"name": "Paris", "lat": 48.85, "lon": 2.35, "type": "camp"}])
+            table([{"name": "Paris", "lat": 48.85, "lon": 2.35, "type": "health camp"}])
         )
         assert sites == []
         assert "outside India" in problems[0]
