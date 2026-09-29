@@ -155,6 +155,34 @@ python -m locator render maps/your-file.yaml
 
 The finished files appear in `output/`, in a folder named after `output_name`.
 
+### Two kinds of map
+
+**One district** gives the three-panel locator map: India, the state, then the
+district with its blocks and your sites.
+
+**Several districts** gives a coverage map instead — one map of the state with
+each chosen district marked. That is how you show where a programme runs across
+a state. Blocks and sites still apply to a single district, so the block picker
+steps aside when you choose more than one.
+
+In a config file, use `districts` (plural) for several:
+
+```yaml
+state: Karnataka
+districts: [Mysore, Mandya, Hassan, Tumkur]
+```
+
+Older district spellings are understood: Mysore, Bangalore Urban, Tumkur,
+Shimoga, Gulbarga and the rest all resolve to the names the government register
+uses now.
+
+### Every map on its own as well as together
+
+A three-panel run also writes each panel out separately — India, the state and
+the district — each with its own title, scale bar, legend and sources. Use the
+strip when you want the whole story on one page, or a single map when a proposal
+only needs the district.
+
 ### Finding a site by name
 
 In the dashboard, open **Find a place by name** under Sites, type the name and

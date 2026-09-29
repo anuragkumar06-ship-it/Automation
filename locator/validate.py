@@ -111,6 +111,16 @@ class ResolvedTarget:
     unit_level: str = "block"        # "block", "tehsil" or "none"
     unit_coverage: float = 1.0       # share of the district the units cover
 
+    # Several districts picked at once. The third panel only makes sense for
+    # one district, so a request naming several is a different map: the state
+    # with each of them marked, which is how programme coverage is shown.
+    district_names: list[str] = field(default_factory=list)
+    target_district_keys: list[str] = field(default_factory=list)
+
+    @property
+    def multi_district(self) -> bool:
+        return len(self.target_district_keys) > 1
+
 
 def _load_reference_counts() -> dict[tuple[str, str], dict]:
     """Load ``data/lgd/reference_counts.csv``.
@@ -136,13 +146,27 @@ def _load_reference_counts() -> dict[tuple[str, str], dict]:
 def validate_request(
     *,
     state: str,
-    district: str,
-    blocks: list[str],
-    sites: list[dict],
+    district: str | None = None,
+    districts: list[str] | None = None,
+    blocks: list[str] | None = None,
+    sites: list[dict] | None = None,
     aliases: AliasTable,
     report: ValidationReport | None = None,
 ) -> tuple[ValidationReport, ResolvedTarget | None]:
-    """Run every pre-render check. Returns the report and, if usable, the target."""
+    """Run every pre-render check. Returns the report and, if usable, the target.
+
+    ``districts`` names one or more districts. One district gives the
+    three-panel locator map. Several give a state coverage map, with each of
+    them marked - the third panel would have nothing to show.
+
+    ``district`` is the older single-district spelling and still works.
+    """
+    wanted = [d for d in (districts or []) if str(d).strip()]
+    if district and not wanted:
+        wanted = [district]
+    blocks = blocks or []
+    sites = sites or []
+
     report = report or ValidationReport()
     references = _load_reference_counts()
 
@@ -166,9 +190,9 @@ def validate_request(
     state_display = display(state_row["name"])
 
     # ---- Check 1b: the district exists in that state ------------------------
-    district_canonical, alias_hit = aliases.resolve("district", district)
-    if alias_hit:
-        report.info("names", alias_hit.message())
+    if not wanted:
+        report.error("district name", "No district was chosen.")
+        return report, None
 
     districts = data_module.districts_of(state_row["lgd"])
     if districts.empty:
@@ -179,19 +203,32 @@ def validate_request(
         )
         return report, None
 
-    district_match = districts[districts["name_key"] == name_key(district_canonical)]
-    if district_match.empty:
-        near = _closest(name_key(district_canonical), districts["name_key"].tolist())
-        hint = f" Did you mean {display(near)}?" if near else ""
-        report.error(
-            "district name",
-            f"{district!r} is not a district of {state_display}.{hint} "
-            f"Add a spelling variant to data/aliases.csv if the name is right.",
-        )
-        return report, None
-    district_row = district_match.iloc[0]
+    chosen_keys: list[str] = []
+    chosen_names: list[str] = []
+    for given in wanted:
+        canonical, alias_hit = aliases.resolve("district", given)
+        if alias_hit:
+            report.info("names", alias_hit.message())
+        match = districts[districts["name_key"] == name_key(canonical)]
+        if match.empty:
+            near = _closest(name_key(canonical), districts["name_key"].tolist())
+            hint = f" Did you mean {display(near)}?" if near else ""
+            report.error(
+                "district name",
+                f"{given!r} is not a district of {state_display}.{hint} "
+                f"Add a spelling variant to data/aliases.csv if the name is right.",
+            )
+            return report, None
+        key_value = match.iloc[0]["name_key"]
+        if key_value in chosen_keys:
+            continue
+        chosen_keys.append(key_value)
+        chosen_names.append(display(match.iloc[0]["name"]))
+
+    district_row = districts[districts["name_key"] == chosen_keys[0]].iloc[0]
     district_display = display(district_row["name"])
     district_lgd = district_row["lgd"]
+    many = len(chosen_keys) > 1
 
     # ---- Check 2: district count against the LGD reference ------------------
     _check_count(
@@ -203,6 +240,57 @@ def validate_request(
         observed_names=sorted(display(n) for n in districts["name"]),
         what=f"districts in {state_display}",
     )
+
+    # ---- several districts: a state coverage map, no third panel ------------
+    if many:
+        if blocks:
+            report.error(
+                "blocks",
+                f"Blocks cannot be highlighted when {len(chosen_keys)} districts are "
+                f"chosen: the third panel shows one district at a time. Pick a single "
+                f"district to mark blocks, or clear the block selection.",
+            )
+            return report, None
+
+        chosen = districts[districts["name_key"].isin(chosen_keys)]
+        report.info(
+            "districts",
+            f"{len(chosen_keys)} districts chosen, so the map is {state_display} with "
+            f"each of them marked: {', '.join(chosen_names)}.",
+        )
+
+        resolved_sites = _check_sites(
+            report=report,
+            sites=sites,
+            district_row=_combined_row(chosen, state_display),
+            district_display=f"the {len(chosen_keys)} chosen districts",
+            block_frame=chosen.iloc[0:0],
+            stated_blocks=[],
+            unit_label="district",
+        )
+        _check_geometry(report, districts, f"districts of {state_display}")
+
+        if report.errors:
+            return report, None
+
+        return report, ResolvedTarget(
+            state_name=state_display,
+            state_key=name_key(state_display),
+            state_row=state_row,
+            district_name=district_display,
+            district_lgd=district_lgd,
+            district_row=district_row,
+            districts=districts,
+            blocks=chosen.iloc[0:0],
+            target_block_names=[],
+            sites=resolved_sites,
+            block_level_label="district",
+            blocks_available=False,
+            unit_level="none",
+            unit_coverage=1.0,
+            district_names=chosen_names,
+            target_district_keys=chosen_keys,
+        )
 
     # ---- Check 3: block layer and block count -------------------------------
     block_frame = data_module.blocks_of(district_lgd)
@@ -328,6 +416,8 @@ def validate_request(
         blocks_available=blocks_available,
         unit_level=unit_level,
         unit_coverage=unit_coverage,
+        district_names=chosen_names,
+        target_district_keys=chosen_keys,
     )
 
 
@@ -395,6 +485,14 @@ def _check_count(*, report, references, aliases, level, parent, observed_names, 
         return
 
     report.info(f"{level} count", f"{_sentence(what)}: {observed}, matching {source}.")
+
+
+def _combined_row(chosen, state_display):
+    """The chosen districts as one shape, for testing whether a site is in any of them."""
+    return {
+        "geometry": chosen.geometry.union_all(),
+        "name": f"{len(chosen)} districts of {state_display}",
+    }
 
 
 def _check_sites(

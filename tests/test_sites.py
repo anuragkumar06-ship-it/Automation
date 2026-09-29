@@ -164,3 +164,90 @@ class TestPanelHasNoAxisFurniture:
         # The frame itself must survive: it is what draws the panel border.
         assert all(spine.get_visible() for spine in ax.spines.values())
         plt.close(figure)
+
+
+class TestMultipleDistricts:
+    """Several districts at once, which produces a state coverage map.
+
+    The three-panel locator answers "where is this one place". Picking several
+    districts answers a different question - where across a state a programme
+    runs - so it produces one state map with each district marked, because the
+    third panel would have nothing to show.
+    """
+
+    def aliases(self):
+        from locator import data as data_module
+        from locator.names import load_aliases
+
+        return load_aliases(data_module.data_dir() / "aliases.csv")
+
+    def test_one_district_still_gives_the_three_panel_map(self):
+        from locator.validate import validate_request
+
+        _, target = validate_request(
+            state="Tamil Nadu", districts=["Madurai"], aliases=self.aliases()
+        )
+        assert target.multi_district is False
+        assert target.district_names == ["Madurai"]
+
+    def test_several_districts_are_all_resolved(self):
+        from locator.validate import validate_request
+
+        report, target = validate_request(
+            state="Karnataka",
+            districts=["Mysore", "Mandya", "Hassan", "Tumkur"],
+            aliases=self.aliases(),
+        )
+        assert report.errors == []
+        assert target.multi_district is True
+        # Older spellings resolve to what LGD actually calls them.
+        assert target.district_names == ["Mysuru", "Mandya", "Hassan", "Tumakuru"]
+
+    def test_the_whole_state_is_still_carried_for_context(self):
+        from locator.validate import validate_request
+
+        _, target = validate_request(
+            state="Karnataka", districts=["Mysuru", "Mandya"], aliases=self.aliases()
+        )
+        assert len(target.districts) == 31, "every district is drawn, two are marked"
+
+    def test_a_wrong_name_among_several_is_named(self):
+        from locator.validate import validate_request
+
+        report, target = validate_request(
+            state="Karnataka",
+            districts=["Mysuru", "Nowhere At All"],
+            aliases=self.aliases(),
+        )
+        assert target is None
+        assert "Nowhere At All" in report.errors[0].message
+
+    def test_duplicates_are_folded_together(self):
+        from locator.validate import validate_request
+
+        _, target = validate_request(
+            state="Karnataka",
+            districts=["Mysuru", "Mysore", "Mandya"],
+            aliases=self.aliases(),
+        )
+        assert target.district_names == ["Mysuru", "Mandya"]
+
+    def test_blocks_cannot_be_marked_across_several_districts(self):
+        from locator.validate import validate_request
+
+        report, target = validate_request(
+            state="Karnataka",
+            districts=["Mysuru", "Mandya"],
+            blocks=["Some block"],
+            aliases=self.aliases(),
+        )
+        assert target is None
+        assert "one district at a time" in report.errors[0].message
+
+    def test_the_old_single_district_spelling_still_works(self):
+        from locator.validate import validate_request
+
+        _, target = validate_request(
+            state="Tamil Nadu", district="Madurai", aliases=self.aliases()
+        )
+        assert target.district_names == ["Madurai"]

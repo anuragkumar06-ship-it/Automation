@@ -49,9 +49,13 @@ def load_config(path: str | Path) -> dict:
     if not isinstance(config, dict):
         raise SystemExit(f"{path} is not a valid map config. Compare it with maps/madurai.yaml.")
 
-    for required in ("state", "district"):
-        if not config.get(required):
-            raise SystemExit(f"{path} is missing the {required!r} setting.")
+    if not config.get("state"):
+        raise SystemExit(f"{path} is missing the 'state' setting.")
+    if not config.get("district") and not config.get("districts"):
+        raise SystemExit(
+            f"{path} needs either 'district' for one district, or 'districts' "
+            f"for several."
+        )
 
     config.setdefault("blocks", [])
     config.setdefault("sites", [])
@@ -81,7 +85,8 @@ def run_from_config(
     report = ValidationReport()
     report, target = validate_request(
         state=config["state"],
-        district=config["district"],
+        district=config.get("district"),
+        districts=config.get("districts"),
         blocks=list(config.get("blocks") or []),
         sites=list(config.get("sites") or []),
         aliases=aliases,
@@ -126,7 +131,8 @@ def _render_log(*, config, report, target, result) -> str:
         "Inputs",
         "-" * 60,
         f"State:    {config['state']}  ->  {target.state_name}",
-        f"District: {config['district']}  ->  {target.district_name} (LGD {target.district_lgd})",
+        f"District: {', '.join(target.district_names)}"
+        + (f" (LGD {target.district_lgd})" if not target.multi_district else ""),
         f"Blocks:   {', '.join(config.get('blocks') or []) or '(none)'}",
     ]
     for site in target.sites:
@@ -225,7 +231,8 @@ def main(argv: list[str] | None = None) -> int:
         aliases = load_aliases(project_root() / "data" / "aliases.csv")
         report, _ = validate_request(
             state=config["state"],
-            district=config["district"],
+            district=config.get("district"),
+            districts=config.get("districts"),
             blocks=list(config.get("blocks") or []),
             sites=list(config.get("sites") or []),
             aliases=aliases,

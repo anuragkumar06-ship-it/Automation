@@ -70,6 +70,14 @@ SCALE_BAND = 0.10
 # Breathing room around the mapped area.
 EXTENT_PAD = 0.02
 
+# The tallest a single-map panel is allowed to be, so a tall state does not
+# produce a page nobody can look at whole.
+COVERAGE_MAX_HEIGHT_IN = 6.4
+COVERAGE_MIN_WIDTH_IN = 8.6
+
+# How tall a single panel is drawn when written out on its own.
+PANEL_ALONE_HEIGHT_IN = 5.6
+
 # Fixed bands, in inches, for the title block above the panels and for the
 # legend plus source line below them. Keeping these in inches rather than as a
 # fraction means type stays the same size whatever height the panels come out.
@@ -113,6 +121,15 @@ class Panel:
 def render_map(*, target, config: dict, brand: Brand, report, output_dir: Path) -> RenderResult:
     """Render the map and write SVG, PDF and PNG files plus a render log."""
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    if getattr(target, "multi_district", False):
+        # Several districts picked: the third panel has nothing to show, so the
+        # map is the state with each of them marked. This is how programme
+        # coverage across a state gets shown.
+        return _render_coverage(
+            target=target, config=config, brand=brand, output_dir=output_dir
+        )
+
     notes: list[str] = []
 
     plt.rcParams["font.family"] = brand.font_family
@@ -183,16 +200,15 @@ def render_map(*, target, config: dict, brand: Brand, report, output_dir: Path) 
     )
 
     name = config.get("output_name") or "locator_map"
-    files: list[Path] = []
-    for path, kwargs in [
-        (output_dir / f"{name}.svg", {}),
-        (output_dir / f"{name}.pdf", {}),
-        (output_dir / f"{name}_300dpi.png", {"dpi": 300}),
-        (output_dir / f"{name}_600dpi.png", {"dpi": 600}),
-    ]:
-        figure.savefig(path, facecolor=brand.background, **kwargs)
-        files.append(path)
+    files = _write_figure(figure, output_dir, name)
     plt.close(figure)
+
+    # Each panel on its own as well as the strip, so a proposal can use just
+    # the district map without cropping the other two off by hand.
+    files += _write_panels_separately(
+        panels, config=config, brand=brand, output_dir=output_dir, name=name,
+        target=target,
+    )
 
     notes.append(f"Source line: {source_line}")
     notes.append(
@@ -221,6 +237,225 @@ def render_map(*, target, config: dict, brand: Brand, report, output_dir: Path) 
     notes.append(f"Font used: {brand.font_family}.")
 
     return RenderResult(files=files, figure_size=(width, height), notes=notes)
+
+
+def _render_coverage(*, target, config: dict, brand: Brand, output_dir: Path) -> RenderResult:
+    """One state, with several districts marked. A coverage map, not a locator.
+
+    Same data, same checks, same brand as the three-panel map; it simply
+    answers a different question - not "where is this one place" but "where
+    across this state are we working".
+    """
+    notes: list[str] = []
+
+    plt.rcParams["font.family"] = brand.font_family
+    plt.rcParams["svg.fonttype"] = "none"
+    plt.rcParams["pdf.fonttype"] = 42
+
+    districts = target.districts.copy()
+    crs = local_crs(districts)
+    districts = districts.to_crs(crs)
+    districts["geometry"] = districts.geometry.simplify(
+        SIMPLIFY_STATE_M, preserve_topology=True
+    )
+    districts = _repair(districts)
+
+    mask = districts["name_key"].isin(target.target_district_keys)
+    panel = Panel(
+        kind="coverage",
+        # No caption: the title above already names the state, and a single
+        # map does not need labelling twice.
+        caption="",
+        frame=districts,
+        crs=crs,
+        highlight_mask=mask,
+        highlight_colours=[brand.highlight],
+        extent=_extent(districts.total_bounds),
+        # No neighbouring states either. On a one-state map they fill the
+        # frame with grey and crowd the thing the map is about.
+        context=None,
+        sites=target.sites,
+    )
+
+    margin = brand.layout("margin_in")
+    # Fit inside both dimensions. Sizing on width alone made a tall state such
+    # as Karnataka come out nearly a metre high.
+    available_w = brand.layout("figure_width_in") - 2 * margin
+    panel_h = min(COVERAGE_MAX_HEIGHT_IN, available_w / panel.aspect)
+    panel_w = panel_h * panel.aspect
+
+    # The page is then trimmed to the map rather than left at A4 width, which
+    # for a portrait state left two thirds of the sheet empty. The floor is
+    # what the title and the source line need to sit on one line each.
+    width = max(panel_w + 2 * margin, COVERAGE_MIN_WIDTH_IN)
+    height = panel_h + BAND_TOP_IN + BAND_BOTTOM_IN
+
+    figure = plt.figure(figsize=(width, height), facecolor=brand.background)
+    panel.ax = figure.add_axes(
+        [margin / width, BAND_BOTTOM_IN / height, panel_w / width, panel_h / height],
+        facecolor=brand.panel_fill,
+    )
+    _draw_panel(panel, brand)
+
+    title = config.get("title") or f"{target.state_name}: districts covered"
+    _draw_title_block(
+        figure,
+        title,
+        brand,
+        margin=margin,
+        width=width,
+        height=height,
+        rule_right=(
+            width - margin - brand.logo_width_in - brand.logo_clear_space_in
+            if brand.show_logo and brand.logo_position == "top-right"
+            else None
+        ),
+    )
+    _draw_coverage_legend(figure, panel, brand, target=target)
+
+    if brand.show_logo:
+        _draw_logo(figure, brand, margin=margin, width=width, height=height)
+
+    source_line = _source_line()
+    figure.text(
+        margin / width,
+        0.22 / height,
+        source_line,
+        ha="left",
+        va="center",
+        fontsize=brand.size("source_line"),
+        color=brand.text_muted,
+    )
+
+    name = config.get("output_name") or "coverage_map"
+    files = _write_figure(figure, output_dir, name)
+    plt.close(figure)
+
+    notes.append(f"Source line: {source_line}")
+    notes.append(
+        f"Map type: state coverage, {len(target.target_district_keys)} of "
+        f"{len(districts)} districts marked."
+    )
+    notes.append("Districts marked: " + ", ".join(target.district_names))
+    notes.append(f"Projection: {crs.to_string()}")
+    notes.append(f"Font used: {brand.font_family}.")
+    return RenderResult(files=files, figure_size=(width, height), notes=notes)
+
+
+def _write_panels_separately(
+    panels, *, config, brand: Brand, output_dir: Path, name: str, target=None
+):
+    """Write each panel out as its own map, beside the three-panel strip.
+
+    Redrawn rather than cropped, so each one gets its own title, logo, scale
+    bar and source line and stands on its own in a document.
+    """
+    written: list[Path] = []
+    margin = brand.layout("margin_in")
+    overall = config.get("title") or ""
+
+    for panel in panels:
+        panel_h = min(COVERAGE_MAX_HEIGHT_IN, PANEL_ALONE_HEIGHT_IN)
+        panel_w = panel_h * panel.aspect
+        width = max(panel_w + 2 * margin, COVERAGE_MIN_WIDTH_IN)
+        height = panel_h + BAND_TOP_IN + BAND_BOTTOM_IN
+
+        figure = plt.figure(figsize=(width, height), facecolor=brand.background)
+        panel.ax = figure.add_axes(
+            [margin / width, BAND_BOTTOM_IN / height, panel_w / width, panel_h / height],
+            facecolor=brand.panel_fill,
+        )
+        caption, panel.caption = panel.caption, ""  # the title says it instead
+        _draw_panel(panel, brand)
+        panel.caption = caption
+
+        title = caption if not overall else f"{caption} — {overall}"
+        _draw_title_block(
+            figure,
+            title,
+            brand,
+            margin=margin,
+            width=width,
+            height=height,
+            rule_right=(
+                width - margin - brand.logo_width_in - brand.logo_clear_space_in
+                if brand.show_logo and brand.logo_position == "top-right"
+                else None
+            ),
+        )
+        # The district panel is the one carrying a highlight and site markers,
+        # so it is the one that needs a key to read them by.
+        if target is not None and panel.kind == "district":
+            _draw_legend(figure, panel, brand, target=target)
+
+        if brand.show_logo:
+            _draw_logo(figure, brand, margin=margin, width=width, height=height)
+
+        figure.text(
+            margin / width,
+            0.22 / height,
+            _source_line(),
+            ha="left",
+            va="center",
+            fontsize=brand.size("source_line"),
+            color=brand.text_muted,
+        )
+
+        written += _write_figure(figure, output_dir, f"{name}_{panel.kind}")
+        plt.close(figure)
+
+    return written
+
+
+def _draw_coverage_legend(figure, panel: Panel, brand: Brand, *, target) -> None:
+    """Marked against not marked, plus any site types used."""
+    handles = [
+        Line2D([], [], marker="s", linestyle="none", color=brand.highlight,
+               markersize=6, label="Districts covered"),
+        Line2D([], [], marker="s", linestyle="none", color=brand.unit_fill,
+               markersize=6, label="Other districts"),
+    ]
+    seen = set()
+    for site in panel.sites:
+        site_type = (site.get("type") or "site").lower()
+        if site_type in seen:
+            continue
+        seen.add(site_type)
+        handles.append(
+            Line2D([], [], marker=brand.marker(site_type), linestyle="none",
+                   color=brand.site_marker, markersize=5,
+                   label=site_type[:1].upper() + site_type[1:])
+        )
+
+    box = panel.ax.get_position()
+    legend = figure.legend(
+        handles=handles,
+        loc="upper left",
+        bbox_to_anchor=(box.x0, box.y0 - 0.022),
+        frameon=False,
+        fontsize=brand.size("legend"),
+        handletextpad=0.6,
+        labelspacing=0.4,
+        borderpad=0.0,
+        ncols=min(len(handles), 3),
+        columnspacing=1.5,
+    )
+    for text in legend.get_texts():
+        text.set_color(brand.text_secondary)
+
+
+def _write_figure(figure, output_dir: Path, name: str) -> list[Path]:
+    """Write one figure out in every format, vector first."""
+    files: list[Path] = []
+    for path, kwargs in [
+        (output_dir / f"{name}.svg", {}),
+        (output_dir / f"{name}.pdf", {}),
+        (output_dir / f"{name}_300dpi.png", {"dpi": 300}),
+        (output_dir / f"{name}_600dpi.png", {"dpi": 600}),
+    ]:
+        figure.savefig(path, facecolor="#FFFFFF", **kwargs)
+        files.append(path)
+    return files
 
 
 # --------------------------------------------------------------------------
@@ -475,6 +710,10 @@ def _frame_panel(ax, brand: Brand) -> None:
 
 def _caption_panel(ax, caption: str, brand: Brand, *, footnote: str | None = None) -> None:
     """Panel name above the frame, with a short rule under it."""
+    if not caption:
+        if footnote:
+            _caption_footnote(ax, footnote, brand)
+        return
     ax.text(
         0.0,
         1.062,
@@ -496,6 +735,12 @@ def _caption_panel(ax, caption: str, brand: Brand, *, footnote: str | None = Non
         zorder=12,
     )
     if footnote:
+        _caption_footnote(ax, footnote, brand)
+
+
+def _caption_footnote(ax, footnote: str, brand: Brand) -> None:
+    """A quiet line under a panel, saying something the map cannot show."""
+    if True:
         ax.text(
             0.0,
             -0.035,

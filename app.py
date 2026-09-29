@@ -111,6 +111,35 @@ def _district_shape(state_lgd: int, district_lgd: int):
     return geometry, tuple(float(v) for v in geometry.bounds)
 
 
+def _target_label(chosen: list[str], first: str) -> str:
+    """How to name the area a site has to fall inside."""
+    if len(chosen) > 1:
+        return f"the {len(chosen)} chosen districts"
+    return f"{first} district"
+
+
+def _target_shape(state_lgd: int, chosen: list[str], pairs):
+    """The shape sites are tested against: one district, or all chosen together."""
+    lookup = dict(pairs)
+    shapes = []
+    for name in chosen:
+        lgd = lookup.get(name)
+        if lgd is None:
+            continue
+        shape, _ = _district_shape(state_lgd, lgd)
+        if shape is not None:
+            shapes.append(shape)
+    if not shapes:
+        return None, None
+    if len(shapes) == 1:
+        return shapes[0], tuple(float(v) for v in shapes[0].bounds)
+
+    from shapely.ops import unary_union
+
+    merged = unary_union(shapes)
+    return merged, tuple(float(v) for v in merged.bounds)
+
+
 @st.cache_data(show_spinner=False)
 def _unit_options(district_lgd: int, district_lgd_geom_key: str) -> tuple[list[str], str]:
     """The units the third panel can highlight, and what they are called.
@@ -175,15 +204,38 @@ with st.sidebar:
 
     district_names = [name for name, _ in district_pairs]
     default_district = "Madurai" if "Madurai" in district_names else district_names[0]
-    district_name = st.selectbox(
-        "District",
+    chosen_districts = st.multiselect(
+        f"Districts ({len(district_names)} in this state)",
         district_names,
-        index=district_names.index(default_district),
+        default=[default_district],
+        help=(
+            "One district gives the three-panel locator map. Several give a "
+            "coverage map: the state with each of them marked."
+        ),
     )
+    if not chosen_districts:
+        st.warning("Choose at least one district.")
+        st.stop()
+
+    many_districts = len(chosen_districts) > 1
+    district_name = chosen_districts[0]
     district_lgd = dict(district_pairs)[district_name]
 
-    block_names, unit_label = _unit_options(district_lgd, district_lgd_geom_key=district_name)
-    if block_names:
+    if many_districts:
+        st.markdown(
+            f'<div class="cf-caption">{len(chosen_districts)} districts chosen, so '
+            "this will be a coverage map of the state with each one marked. Blocks "
+            "and the three-panel layout apply to a single district.</div>",
+            unsafe_allow_html=True,
+        )
+
+    block_names, unit_label = (
+        ([], "block") if many_districts
+        else _unit_options(district_lgd, district_lgd_geom_key=district_name)
+    )
+    if many_districts:
+        blocks = []
+    elif block_names:
         default_blocks = [b for b in ("Madurai West",) if b in block_names]
         blocks = st.multiselect(
             f"{unit_label.capitalize()}s to highlight "
@@ -262,7 +314,7 @@ with st.sidebar:
                 st.session_state.geo_results = []
                 st.warning("Type a place name first.")
             else:
-                shape, bbox = _district_shape(state_lgd, district_lgd)
+                shape, bbox = _target_shape(state_lgd, chosen_districts, district_pairs)
                 from shapely.geometry import Point
 
                 def _inside(lat, lon):
@@ -352,7 +404,7 @@ with st.sidebar:
     # had just added.
     _checked, _problems = sites_module.sites_from_table(sites_table)
     if _checked:
-        shape, _ = _district_shape(state_lgd, district_lgd)
+        shape, _ = _target_shape(state_lgd, chosen_districts, district_pairs)
         if shape is not None:
             from shapely.geometry import Point
 
@@ -363,11 +415,13 @@ with st.sidebar:
             if strays:
                 names = ", ".join(s["name"] for s in strays)
                 st.warning(
-                    f"{len(strays)} site(s) are not inside {district_name} district: "
+                    f"{len(strays)} site(s) are not inside "
+                    f"{_target_label(chosen_districts, district_name)}: "
                     f"{names}. They are probably left over from another district."
                 )
                 if st.button(
-                    f"Remove the {len(strays)} site(s) outside {district_name}",
+                    f"Remove the {len(strays)} site(s) outside "
+                    f"{_target_label(chosen_districts, district_name)}",
                     use_container_width=True,
                     key="drop_strays",
                 ):
@@ -379,7 +433,8 @@ with st.sidebar:
                     st.rerun()
             else:
                 st.caption(
-                    f"All {len(_checked)} site(s) fall inside {district_name} district."
+                    f"All {len(_checked)} site(s) fall inside "
+                    f"{_target_label(chosen_districts, district_name)}."
                 )
     for _problem in _problems:
         st.warning(_problem)
@@ -403,11 +458,21 @@ with st.sidebar:
     st.divider()
     with st.expander("Titles and output"):
         title = st.text_input(
-            "Title", value="", placeholder=f"{district_name} district, {state_name}"
+            "Title",
+            value="",
+            placeholder=(
+                f"{state_name}: districts covered"
+                if many_districts
+                else f"{district_name} district, {state_name}"
+            ),
         )
         output_name = st.text_input(
             "Folder name for the files",
-            value=f"{district_name.lower().replace(' ', '_')}_locator",
+            value=(
+                f"{state_name.lower().replace(' ', '_')}_coverage"
+                if many_districts
+                else f"{district_name.lower().replace(' ', '_')}_locator"
+            ),
         )
 
     force = st.checkbox(
@@ -444,7 +509,7 @@ def _build_config() -> dict:
         st.warning(problem)
     return {
         "state": state_name,
-        "district": district_name,
+        "districts": list(chosen_districts),
         "blocks": list(blocks),
         "sites": sites,
         "title": title.strip() or None,
@@ -519,27 +584,62 @@ elif go:
             st.image(str(preview), use_container_width=True)
             st.markdown("</div>", unsafe_allow_html=True)
 
+        def _download_row(heading: str, stem: str, note: str) -> None:
+            """Four format buttons for one map."""
+            formats = [
+                (f"{stem}.svg", "SVG", "vector, for a designer"),
+                (f"{stem}.pdf", "PDF", "vector, for printing"),
+                (f"{stem}_300dpi.png", "PNG 300", "documents and decks"),
+                (f"{stem}_600dpi.png", "PNG 600", "large print"),
+            ]
+            present = [f for f in formats if (output_dir / f[0]).exists()]
+            if not present:
+                return
+            st.markdown(f"**{heading}**")
+            if note:
+                st.markdown(f'<div class="cf-caption">{note}</div>', unsafe_allow_html=True)
+            columns = st.columns(len(present))
+            for column, (filename, label, caption) in zip(columns, present):
+                with column:
+                    st.download_button(
+                        label,
+                        data=(output_dir / filename).read_bytes(),
+                        file_name=filename,
+                        use_container_width=True,
+                        key=f"dl_{filename}",
+                    )
+                    st.caption(caption)
+
         st.subheader("Download")
-        wanted = [
-            (f"{name}.svg", "SVG — vector, for a designer"),
-            (f"{name}.pdf", "PDF — vector, for printing"),
-            (f"{name}_300dpi.png", "PNG 300 dpi — documents and decks"),
-            (f"{name}_600dpi.png", "PNG 600 dpi — large print"),
-            ("render_log.txt", "Render log — what was used and checked"),
-        ]
-        columns = st.columns(len(wanted))
-        for column, (filename, caption) in zip(columns, wanted):
-            path = output_dir / filename
-            if not path.exists():
-                continue
-            with column:
-                st.download_button(
-                    caption.split(" — ")[0],
-                    data=path.read_bytes(),
-                    file_name=filename,
-                    use_container_width=True,
-                )
-                st.caption(caption.split(" — ", 1)[1])
+
+        if (output_dir / f"{name}_district.svg").exists():
+            _download_row(
+                "All three panels together", name, "The full strip, as previewed above."
+            )
+            st.markdown(theme.rule_html(), unsafe_allow_html=True)
+            st.markdown("**Each map on its own**")
+            st.markdown(
+                '<div class="cf-caption">The same three maps written separately, each '
+                "with its own title, scale bar and sources, for using one at a time in "
+                "a document.</div>",
+                unsafe_allow_html=True,
+            )
+            _download_row("India", f"{name}_india", "")
+            _download_row(f"{config['state']}", f"{name}_state", "")
+            _download_row(f"{district_name} district", f"{name}_district", "")
+        else:
+            _download_row("The map", name, "")
+
+        log_file = output_dir / "render_log.txt"
+        if log_file.exists():
+            st.markdown(theme.rule_html(), unsafe_allow_html=True)
+            st.download_button(
+                "Render log",
+                data=log_file.read_bytes(),
+                file_name="render_log.txt",
+                key="dl_render_log",
+            )
+            st.caption("What was used and what was checked. Worth keeping.")
 
         with st.expander("Render log"):
             log = output_dir / "render_log.txt"

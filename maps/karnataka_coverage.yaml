@@ -1,0 +1,23 @@
+# A programme coverage map: one state, several districts marked.
+# Use "districts" (plural) for this. One district in the list gives the
+# ordinary three-panel locator map instead.
+
+state: Karnataka
+districts:
+  - Mysore            # older spellings are understood
+  - Mandya
+  - Hassan
+  - Tumkur
+  - Kolar
+  - Chitradurga
+  - Davangere
+  - Chikkamangalore
+  - Ramanagara
+  - Bangalore Urban
+  - Bangalore Rural
+  - Chikkaballapura
+  - Chamarajanagara
+
+sites: []
+title: null
+output_name: karnataka_coverage
