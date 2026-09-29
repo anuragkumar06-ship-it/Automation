@@ -82,6 +82,13 @@ def run_from_config(
     root = project_root()
     aliases = load_aliases(root / "data" / "aliases.csv")
 
+    # Read defensively. A hosted app can end up running a new app.py against
+    # an older copy of this module still held in memory, and a missing key
+    # then crashes with a bare KeyError that tells the user nothing. Every
+    # lookup here tolerates the other spelling.
+    if not config.get("state"):
+        raise ValueError("The map needs a state.")
+
     report = ValidationReport()
     report, target = validate_request(
         state=config["state"],
@@ -100,7 +107,7 @@ def run_from_config(
 
     brand = load_brand(root / "style" / "brand.yaml")
     output_root = Path(output_root or (root / "output"))
-    output_dir = output_root / config["output_name"]
+    output_dir = output_root / (config.get("output_name") or "locator_map")
 
     result = render_map(
         target=target,
@@ -130,7 +137,7 @@ def _render_log(*, config, report, target, result) -> str:
         "",
         "Inputs",
         "-" * 60,
-        f"State:    {config['state']}  ->  {target.state_name}",
+        f"State:    {config.get('state')}  ->  {target.state_name}",
         f"District: {', '.join(target.district_names)}"
         + (f" (LGD {target.district_lgd})" if not target.multi_district else ""),
         f"Blocks:   {', '.join(config.get('blocks') or []) or '(none)'}",

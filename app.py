@@ -510,6 +510,10 @@ def _build_config() -> dict:
     return {
         "state": state_name,
         "districts": list(chosen_districts),
+        # The singular spelling is kept alongside for anything still reading
+        # the older shape, which is what crashed the hosted app when it was
+        # running a new app.py against an older module held in memory.
+        "district": chosen_districts[0] if chosen_districts else None,
         "blocks": list(blocks),
         "sites": sites,
         "title": title.strip() or None,
