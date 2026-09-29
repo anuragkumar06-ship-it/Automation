@@ -120,3 +120,47 @@ class TestEmptySites:
         sites, problems = sites_from_table(empty_sites())
         assert sites == []
         assert problems == []
+
+
+class TestPanelHasNoAxisFurniture:
+    """Panels must not carry chart axis labels.
+
+    GeoPandas writes "Easting [metre]" and "Northing [metre]" onto any plot
+    whose data is in a projected coordinate system. That is useful on an
+    analyst's chart and meaningless on a locator map. Turning the whole axis
+    off used to hide them, but that also hides the spines, and the spines draw
+    the panel frame - so they have to be cleared explicitly.
+    """
+
+    def test_the_frame_clears_both_axis_labels(self):
+        import inspect
+
+        from locator import render
+
+        source = inspect.getsource(render._frame_panel)
+        assert 'set_xlabel("")' in source
+        assert 'set_ylabel("")' in source
+
+    def test_a_rendered_panel_carries_no_axis_label(self):
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        from locator.render import _frame_panel
+        from locator.style import load_brand
+
+        figure, ax = plt.subplots()
+        # What geopandas does to a projected plot.
+        ax.set_xlabel("Easting [metre]")
+        ax.set_ylabel("Northing [metre]")
+
+        _frame_panel(ax, load_brand())
+
+        assert ax.get_xlabel() == ""
+        assert ax.get_ylabel() == ""
+        assert ax.get_xticks().size == 0
+        assert ax.get_yticks().size == 0
+        # The frame itself must survive: it is what draws the panel border.
+        assert all(spine.get_visible() for spine in ax.spines.values())
+        plt.close(figure)

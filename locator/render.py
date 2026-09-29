@@ -455,7 +455,16 @@ def _draw_panel(panel: Panel, brand: Brand) -> None:
 
 
 def _frame_panel(ax, brand: Brand) -> None:
-    """A hairline frame, so each panel reads as its own map rather than a blob."""
+    """A hairline frame, so each panel reads as its own map rather than a blob.
+
+    The axis labels have to be cleared explicitly. GeoPandas writes "Easting
+    [metre]" and "Northing [metre]" onto a plot whose data is in a projected
+    coordinate system, which is helpful on an analyst's chart and meaningless
+    on a locator map. This used to be hidden by turning the whole axis off,
+    but that hides the spines too, and the spines are what draw this frame.
+    """
+    ax.set_xlabel("")
+    ax.set_ylabel("")
     ax.set_xticks([])
     ax.set_yticks([])
     for spine in ax.spines.values():
