@@ -12,7 +12,6 @@ Run it with:
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pandas as pd
@@ -324,19 +323,12 @@ with st.sidebar:
                 )
             else:
                 tried = st.session_state.get("geo_tried") or ["OpenStreetMap"]
-                has_google = bool(os.environ.get("GOOGLE_MAPS_API_KEY"))
-                extra = (
-                    ""
-                    if has_google
-                    else " Setting a Google Maps API key would add Google Places as a "
-                    "third place to look; see DEPLOY.md."
-                )
                 st.info(
                     f"No match inside {district_name} district. Tried "
-                    f"{', '.join(tried)}. That usually means none of them holds that "
-                    f"name here, not that the place does not exist. Try a nearby "
-                    f"landmark, tick “Search beyond this district”, or type the "
-                    f"coordinates in below.{extra}"
+                    f"{', '.join(tried)}. That usually means neither holds that name "
+                    f"here, not that the place does not exist. Try a nearby landmark, "
+                    f"tick “Search beyond this district”, or right-click the place in "
+                    f"Google Maps and type the coordinates in below."
                 )
 
     sites_table = st.data_editor(
