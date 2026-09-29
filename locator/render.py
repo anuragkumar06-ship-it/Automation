@@ -297,7 +297,7 @@ def _render_coverage(*, target, config: dict, brand: Brand, output_dir: Path) ->
     )
     _draw_panel(panel, brand)
 
-    title = config.get("title") or f"{target.state_name}: districts covered"
+    title = config.get("title") or f"{target.state_name} district map"
     _draw_title_block(
         figure,
         title,
@@ -369,7 +369,15 @@ def _write_panels_separately(
         _draw_panel(panel, brand)
         panel.caption = caption
 
-        title = caption if not overall else f"{caption} — {overall}"
+        # On its own, a panel has to say what it is without the other two
+        # beside it to explain it. "Tamil Nadu" alone does not tell a reader
+        # they are looking at that state's districts.
+        standalone = {
+            "india": "India: states and union territories",
+            "state": f"{caption} district map",
+            "district": f"{caption}",
+        }.get(panel.kind, caption)
+        title = standalone if not overall else f"{standalone} — {overall}"
         _draw_title_block(
             figure,
             title,
