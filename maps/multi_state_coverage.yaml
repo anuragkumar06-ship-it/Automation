@@ -8,16 +8,27 @@
 # is still drawn, in grey, and the rest of the country sits behind them so
 # there is no blank paper between states that do not touch.
 #
-# Blocks cannot be marked on a coverage map: the block panel shows one
-# district at a time. Use a three-panel config for that.
+# Each chosen district also gets a map of its own showing its blocks, written
+# beside the overview. A block is about 16 km across, which is a millimetre on
+# a map covering several states and 40 on a map of its own district - so the
+# overview draws block boundaries without naming them, and the names live on
+# the district maps. Set block_detail: false to skip those extra maps.
+#
+# 'blocks' marks particular blocks, keyed by the district they belong to, since
+# a block name is only unique inside its own district. Marked blocks are
+# highlighted on both the district map and the overview.
 
 coverage:
   - state: Karnataka
     districts: [Bengaluru Urban, Mysuru, Kalaburagi]
+    blocks:
+      Mysuru: [Mysuru, Hunsur]
   - state: Telangana
     districts: [Hyderabad]
   - state: Delhi
     districts: [New Delhi]
+
+block_detail: true
 
 sites: []
 

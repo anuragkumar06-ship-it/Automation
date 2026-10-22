@@ -20,6 +20,7 @@ import streamlit as st
 from locator import cache as cache_module, data as data_module
 from locator import geocode, sites as sites_module, theme
 from locator.cli import run_from_config
+from locator.render import slug
 from locator.names import display
 from locator.validate import INFO
 
@@ -254,7 +255,43 @@ with st.sidebar:
                     "give a coverage map: the state with each of them marked."
                 ),
             )
-        areas.append({"state": name, "lgd": lgd, "districts": picked, "pairs": pairs})
+        # Blocks to mark, district by district. Tucked into an expander so ten
+        # districts do not turn the sidebar into a wall of pickers; leaving it
+        # closed marks nothing, which is the usual case.
+        marks: dict[str, list[str]] = {}
+        if multi_state and picked:
+            lookup = dict(pairs)
+            with st.expander(f"Mark blocks in {name} (optional)", expanded=False):
+                st.caption(
+                    "Each district you picked gets a map of its own showing its "
+                    "blocks. Anything marked here is highlighted on that map, and "
+                    "on the overview."
+                )
+                for district in picked:
+                    unit_names, unit_label = _unit_options(lookup[district], district)
+                    if not unit_names:
+                        st.caption(
+                            f"{district}: neither blocks nor tehsils are published."
+                        )
+                        continue
+                    marked = st.multiselect(
+                        f"{district} ({len(unit_names)} {unit_label}s)",
+                        unit_names,
+                        default=[],
+                        key=f"units_{lookup[district]}",
+                    )
+                    if marked:
+                        marks[district] = marked
+
+        areas.append(
+            {
+                "state": name,
+                "lgd": lgd,
+                "districts": picked,
+                "pairs": pairs,
+                "blocks": marks,
+            }
+        )
 
     missing = [area["state"] for area in areas if not area["districts"]]
     if missing:
@@ -277,13 +314,25 @@ with st.sidebar:
     total_districts = sum(len(area["districts"]) for area in areas)
     many_districts = multi_state or len(chosen_districts) > 1
 
+    block_detail = True
     if multi_state:
+        block_detail = st.checkbox(
+            "Also map each district's blocks",
+            value=True,
+            help=(
+                "A block is about 16 km across, which is a millimetre on a map "
+                "covering several states. Each district therefore gets a map of "
+                "its own, where its blocks are big enough to be named."
+            ),
+        )
         st.markdown(
             f'<div class="cf-caption">{len(chosen_states)} states chosen, so this '
             f"will be one map covering all of them with {total_districts} districts "
-            "marked. Only the marked districts are labelled — a full set of "
+            "marked. Only the marked districts are named on it — a full set of "
             "district labels across several states does not stay legible at A4. "
-            "Blocks and the three-panel layout apply to a single district.</div>",
+            "Each district also gets a map of its own, where its blocks have the "
+            "room to be named. The three-panel layout applies to a single "
+            "district.</div>",
             unsafe_allow_html=True,
         )
     elif many_districts:
@@ -590,9 +639,14 @@ def _build_config() -> dict:
         # that does not know about 'coverage' gets a sensible single-state map
         # rather than an error.
         config["coverage"] = [
-            {"state": area["state"], "districts": list(area["districts"])}
+            {
+                "state": area["state"],
+                "districts": list(area["districts"]),
+                "blocks": dict(area.get("blocks") or {}),
+            }
             for area in areas
         ]
+        config["block_detail"] = bool(block_detail)
     return config
 
 
@@ -704,6 +758,25 @@ elif go:
             _download_row(f"{district_name} district", f"{name}_district", "")
         else:
             _download_row("The map", name, "")
+
+            # A multi-state map writes one block map per district beside it.
+            detail_rows = [
+                (district, f"{name}_{slug(district)}")
+                for area in areas
+                for district in area["districts"]
+                if (output_dir / f"{name}_{slug(district)}.svg").exists()
+            ]
+            if detail_rows:
+                st.markdown(theme.rule_html(), unsafe_allow_html=True)
+                st.markdown("**Each district's blocks**")
+                st.markdown(
+                    '<div class="cf-caption">The overview above shows where the work '
+                    "is; these show what it is. One map per district, at the scale a "
+                    "block can actually be named at.</div>",
+                    unsafe_allow_html=True,
+                )
+                for district, stem in detail_rows:
+                    _download_row(f"{district} district", stem, "")
 
         log_file = output_dir / "render_log.txt"
         if log_file.exists():

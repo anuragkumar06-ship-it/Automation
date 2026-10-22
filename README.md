@@ -169,11 +169,28 @@ steps aside when you choose more than one.
 districts you pick in each state marked. That is for a programme that crosses
 state lines: one map instead of one per state.
 
-On that map only the districts you marked are labelled. Every district of every
+On that map only the districts you marked are named. Every district of every
 chosen state is still drawn, in grey, and the rest of the country sits behind
 them — but a full set of district labels across several states is too crowded
 to read on a printed page, so the names are kept for the places the programme
 actually runs. The state names are labelled too, so you can tell which is which.
+
+### Blocks on a multi-state map
+
+A block is about 16 km across. On a map covering several states that comes out
+about a millimetre wide — you can see the boundary, but no name would fit. On a
+map of its own district it is about 40 mm, which is plenty.
+
+So the tool gives you both. The overview draws the block boundaries inside each
+marked district without naming them, and then writes **a separate map for each
+district you picked**, where its blocks are drawn large and named. Those appear
+in the download list under "Each district's blocks".
+
+You can also mark particular blocks. In the dashboard, open "Mark blocks in
+&lt;state&gt;" under that state's districts and pick them district by district.
+Marked blocks are highlighted on their district's map and on the overview.
+
+If you only want the overview, untick "Also map each district's blocks".
 
 In a config file, use `districts` (plural) for several districts in one state:
 
@@ -188,10 +205,14 @@ and `coverage` for several states, one entry each:
 coverage:
   - state: Karnataka
     districts: [Mysuru, Kalaburagi]
+    blocks:
+      Mysuru: [Mysuru, Hunsur]     # optional, keyed by district
   - state: Telangana
     districts: [Hyderabad]
   - state: Delhi
     districts: [New Delhi]
+
+block_detail: true                 # false to skip the per-district maps
 ```
 
 There is a ready-made example in `maps/multi_state_coverage.yaml`.

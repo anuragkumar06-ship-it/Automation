@@ -163,6 +163,85 @@ class TestOneStateIsNotASpecialCase:
         assert len(target.blocks) == 13
 
 
+class TestBlockDetail:
+    """Each chosen district gets a block map of its own."""
+
+    def test_one_detail_per_chosen_district(self, aliases):
+        _, target = run(aliases, THREE_STATES)
+        assert len(target.district_details) == 4
+        assert [d.district_name for d in target.district_details] == [
+            "Bengaluru Urban",
+            "Mysuru",
+            "Hyderabad",
+            "New Delhi",
+        ]
+
+    def test_each_detail_carries_its_own_blocks(self, aliases):
+        _, target = run(aliases, THREE_STATES)
+        counts = {d.district_name: len(d.units) for d in target.district_details}
+        assert counts["Bengaluru Urban"] == 5
+        assert counts["Mysuru"] == 9
+        assert all(d.unit_label == "block" for d in target.district_details)
+
+    def test_blocks_can_be_marked_per_district(self, aliases):
+        report, target = run(
+            aliases,
+            [
+                {
+                    "state": "Tamil Nadu",
+                    "districts": ["Thanjavur"],
+                    "blocks": {"Thanjavur": ["Orattanadu"]},
+                },
+                {"state": "Andhra Pradesh", "districts": ["Bapatla"]},
+            ],
+        )
+        assert report.errors == []
+        marked = {d.district_name: d.marked_names for d in target.district_details}
+        assert marked["Thanjavur"] == ["ORATTANADU"]
+        assert marked["Bapatla"] == []
+
+    def test_a_block_of_the_wrong_district_is_rejected(self, aliases):
+        # Orattanadu is a Thanjavur block, not a Nilgiris one.
+        report, target = run(
+            aliases,
+            [
+                {
+                    "state": "Tamil Nadu",
+                    "districts": ["The Nilgiris"],
+                    "blocks": {"The Nilgiris": ["Orattanadu"]},
+                },
+                {"state": "Andhra Pradesh", "districts": ["Bapatla"]},
+            ],
+        )
+        assert report.errors
+        assert target is None
+
+    def test_a_misspelled_block_is_rejected_with_a_suggestion(self, aliases):
+        report, target = run(
+            aliases,
+            [
+                {
+                    "state": "Tamil Nadu",
+                    "districts": ["Thanjavur"],
+                    "blocks": {"Thanjavur": ["Orathanadu"]},
+                },
+                {"state": "Andhra Pradesh", "districts": ["Bapatla"]},
+            ],
+        )
+        assert target is None
+        assert any("Orattanadu" in i.message for i in report.errors)
+
+    def test_it_can_be_turned_off(self, aliases):
+        _, target = run(aliases, THREE_STATES, block_detail=False)
+        assert target.district_details == []
+
+    def test_turning_it_off_still_draws_the_overview(self, aliases):
+        report, target = run(aliases, THREE_STATES, block_detail=False)
+        assert report.errors == []
+        assert target.multi_state
+        assert len(target.target_district_lgds) == 4
+
+
 class TestConfigShape:
     def test_coverage_entries_are_read(self):
         areas = coverage_areas(

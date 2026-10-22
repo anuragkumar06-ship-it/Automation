@@ -27,6 +27,14 @@ be mapped one state at a time. Only the marked districts are labelled, which is
 the deliberate trade-off — a full set of district labels across several states
 does not stay legible at A4.
 
+**Per-district block maps** — written beside a multi-state coverage map, one
+per chosen district. These exist because of a measurement, not a preference: a
+block is 15.9 km across at the median, which is **1.3 mm** on a multi-state
+sheet, **5.9 mm** even on a single-state panel, and **40 mm** on a map of its
+own district. Blocks are only legible at district scale, so that is where their
+names go. The overview draws their boundaries unnamed and the legend says where
+the names are.
+
 It replaces a manual process where these maps were made with AI image tools.
 Those maps invented blocks that do not exist, missed real districts, and had an
 unreliable India outline. **Accuracy is the first priority, image quality
@@ -45,7 +53,7 @@ Two front ends, one codebase:
 | Thing | State |
 |---|---|
 | Local app | Works. Current on all features. |
-| Tests | 114 passing. Run with `.venv/Scripts/python.exe -m pytest tests/ -q` |
+| Tests | 121 passing. Run with `.venv/Scripts/python.exe -m pytest tests/ -q` |
 | GitHub | In sync. `anuragkumar06-ship-it/Automation`, branch `main`, HEAD `5ca32e1`, tree clean. |
 | Live site | https://map-cognizant.streamlit.app/ — **needs a manual reboot** (see below) |
 | Data coverage | All 36 states/UTs, 785 districts, 7,146 blocks |
@@ -118,7 +126,7 @@ Automation/
   maps/              # madurai, bhagalpur, balotra, karnataka_coverage,
                      #   multi_state_coverage
   assets/            # the CF logo
-  tests/             # 114 tests
+  tests/             # 121 tests
   output/            # gitignored
   .streamlit/config.toml   # CF palette for the dashboard chrome
 ```
@@ -202,6 +210,12 @@ is only unique inside its own state — Bilaspur is in both Himachal Pradesh and
 Chhattisgarh, Hyderabad is a district of Telangana and not of Karnataka — so a
 name-based mask would mark the wrong district with every check still passing.
 There is a test for this.
+
+`DistrictDetail` carries one chosen district's blocks, built by
+`_detail_for_district`. Blocks to mark are keyed by district in the config
+(`blocks: {Mysuru: [...]}`) for the same reason: a block name is only unique
+inside its own district. `_units_for_district` is shared with the single-state
+path, so the tehsil fallback behaves identically on both.
 
 **Districts join to states by LGD code, not by name.** The two layers spell
 Dadra & Nagar Haveli and Daman & Diu differently, and joining by name loses it.

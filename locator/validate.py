@@ -118,6 +118,33 @@ class AreaPart:
 
 
 @dataclass
+class DistrictDetail:
+    """One chosen district, with everything a block map of it needs.
+
+    A coverage map cannot show blocks legibly - a block is about 16 km across,
+    which is a millimetre on a map spanning several states - so each chosen
+    district also gets a map of its own at district scale, where its blocks
+    have the room to be drawn and named. This is what one of those is drawn
+    from.
+    """
+
+    state_name: str
+    district_name: str
+    district_lgd: int
+    district_row: object
+    units: gpd.GeoDataFrame
+    unit_label: str = "block"        # "block" or "tehsil", never interchanged
+    unit_level: str = "block"        # "block", "tehsil" or "none"
+    unit_coverage: float = 1.0
+    marked_names: list[str] = field(default_factory=list)
+    sites: list[dict] = field(default_factory=list)
+
+    @property
+    def units_available(self) -> bool:
+        return self.unit_level != "none"
+
+
+@dataclass
 class ResolvedTarget:
     """What the validator worked out, handed on to the renderer."""
 
@@ -148,6 +175,9 @@ class ResolvedTarget:
     # between two states that do not touch.
     area_parts: list[AreaPart] = field(default_factory=list)
     target_district_lgds: list[int] = field(default_factory=list)
+    # One per chosen district, each drawn as its own block map beside the
+    # overview. Empty when block detail was not asked for.
+    district_details: list[DistrictDetail] = field(default_factory=list)
 
     @property
     def multi_state(self) -> bool:
@@ -246,6 +276,42 @@ def _resolve_districts(
         chosen_lgds.append(int(match.iloc[0]["lgd"]))
 
     return chosen_keys, chosen_names, chosen_lgds
+
+
+def _units_for_district(*, district_lgd, district_row, district_display, report):
+    """The units a block map of this district can show.
+
+    Community development blocks where they are published. Where they are not,
+    the sub-districts that fall inside the district - reported as tehsils and
+    never called blocks, because a tehsil is a different unit. Where neither
+    exists, an empty frame and ``available`` false.
+
+    Returns ``(frame, label, level, coverage, available)``.
+    """
+    frame = data_module.blocks_of(district_lgd)
+    if not frame.empty:
+        return frame, "block", "block", 1.0, True
+
+    tehsils, coverage = data_module.subdistricts_within(district_row["geometry"])
+    if not tehsils.empty:
+        report.info(
+            "block layer",
+            f"No community development blocks are published for {district_display}, "
+            f"so the map shows its {len(tehsils)} tehsils instead. These are "
+            f"sub-districts, not blocks, and the map says so.",
+        )
+        note = (
+            f"The tehsils are selected by which ones fall inside {district_display}, "
+            f"because the sub-district register still files them under the district "
+            f"this one was carved out of. They cover {coverage * 100:.1f}% of it."
+        )
+        if coverage < 0.95:
+            report.warning("tehsil coverage", note)
+        else:
+            report.info("tehsil coverage", note)
+        return tehsils, "tehsil", "tehsil", coverage, True
+
+    return tehsils, "block", "none", 1.0, False
 
 
 def _join_names(names: list[str]) -> str:
@@ -381,39 +447,14 @@ def validate_request(
         )
 
     # ---- Check 3: block layer and block count -------------------------------
-    block_frame = data_module.blocks_of(district_lgd)
-    block_level_label = "block"
-    unit_level = "block"
-    unit_coverage = 1.0
-    blocks_available = not block_frame.empty
-
-    if not blocks_available:
-        # Fall back to sub-districts before giving up on the third panel. They
-        # are never called blocks: a tehsil is a different unit and the map
-        # says so.
-        tehsils, coverage = data_module.subdistricts_within(district_row["geometry"])
-        if not tehsils.empty:
-            block_frame = tehsils
-            block_level_label = "tehsil"
-            unit_level = "tehsil"
-            unit_coverage = coverage
-            blocks_available = True
-
-            report.info(
-                "block layer",
-                f"No community development blocks are published for {district_display}, "
-                f"so the third panel shows its {len(tehsils)} tehsils instead. These are "
-                f"sub-districts, not blocks, and the map says so.",
-            )
-            note = (
-                f"The tehsils are selected by which ones fall inside {district_display}, "
-                f"because the sub-district register still files them under the district "
-                f"this one was carved out of. They cover {coverage * 100:.1f}% of it."
-            )
-            if coverage < 0.95:
-                report.warning("tehsil coverage", note)
-            else:
-                report.info("tehsil coverage", note)
+    block_frame, block_level_label, unit_level, unit_coverage, blocks_available = (
+        _units_for_district(
+            district_lgd=district_lgd,
+            district_row=district_row,
+            district_display=district_display,
+            report=report,
+        )
+    )
 
     if not blocks_available:
         # Some recently created districts have a district boundary published but
@@ -514,12 +555,108 @@ def _sentence(text: str) -> str:
     return text[:1].upper() + text[1:]
 
 
+def _detail_for_district(
+    *,
+    state_display: str,
+    district_lgd: int,
+    district_display: str,
+    district_row,
+    stated: list[str],
+    references,
+    aliases: AliasTable,
+    report: ValidationReport,
+) -> DistrictDetail | None:
+    """Work out the block map for one chosen district of a coverage map.
+
+    Returns ``None`` after reporting, if a named block cannot be matched or
+    there is nothing to draw it from.
+    """
+    units, unit_label, unit_level, coverage, available = _units_for_district(
+        district_lgd=district_lgd,
+        district_row=district_row,
+        district_display=district_display,
+        report=report,
+    )
+
+    stated = [str(b).strip() for b in (stated or []) if str(b).strip()]
+
+    if not available:
+        if stated:
+            report.error(
+                "block layer",
+                f"No community development blocks are published for "
+                f"{district_display}, so {', '.join(stated)} cannot be marked. "
+                f"Clear the block selection for this district.",
+            )
+            return None
+        report.info(
+            "block layer",
+            f"No community development blocks are published for {district_display}. "
+            f"Its map shows the district on its own and says so on its face.",
+        )
+        return DistrictDetail(
+            state_name=state_display,
+            district_name=district_display,
+            district_lgd=district_lgd,
+            district_row=district_row,
+            units=units,
+            unit_label=unit_label,
+            unit_level="none",
+            unit_coverage=coverage,
+        )
+
+    marked: list[str] = []
+    for given in stated:
+        canonical, alias_hit = aliases.resolve("block", given)
+        if alias_hit:
+            report.info("names", alias_hit.message())
+        match = units[units["name_key"] == name_key(canonical)]
+        if match.empty:
+            near = _closest(name_key(canonical), units["name_key"].tolist())
+            hint = f" Did you mean {display(near)}?" if near else ""
+            report.error(
+                "block name",
+                f"{given!r} is not a {unit_label} of {district_display}.{hint} "
+                f"Add a spelling variant to data/aliases.csv if the name is right.",
+            )
+            return None
+        value = match.iloc[0]["name"]
+        if value not in marked:
+            marked.append(value)
+
+    if unit_level == "block":
+        _check_count(
+            report=report,
+            references=references,
+            aliases=aliases,
+            level="block",
+            parent=district_display,
+            observed_names=sorted(display(n) for n in units["name"]),
+            what=f"blocks in {district_display}",
+        )
+
+    _check_geometry(report, units, f"{unit_label}s of {district_display}")
+
+    return DistrictDetail(
+        state_name=state_display,
+        district_name=district_display,
+        district_lgd=district_lgd,
+        district_row=district_row,
+        units=units,
+        unit_label=unit_label,
+        unit_level=unit_level,
+        unit_coverage=coverage,
+        marked_names=marked,
+    )
+
+
 def validate_coverage_request(
     *,
     areas: list[dict],
     sites: list[dict] | None = None,
     aliases: AliasTable,
     report: ValidationReport | None = None,
+    block_detail: bool = True,
 ) -> tuple[ValidationReport, ResolvedTarget | None]:
     """Run the checks for a coverage map spanning several states.
 
@@ -535,25 +672,28 @@ def validate_coverage_request(
     report = report or ValidationReport()
     references = _load_reference_counts()
 
-    cleaned: list[tuple[str, list[str]]] = []
+    cleaned: list[tuple[str, list[str], dict]] = []
     for area in areas or []:
         area = area or {}
         name = str(area.get("state") or "").strip()
         wanted = [
             str(d).strip() for d in (area.get("districts") or []) if str(d).strip()
         ]
+        marks = area.get("blocks")
+        marks = marks if isinstance(marks, dict) else {}
         if name:
-            cleaned.append((name, wanted))
+            cleaned.append((name, wanted, marks))
 
     if not cleaned:
         report.error("states", "No states were chosen.")
         return report, None
 
     if len(cleaned) == 1:
-        state_name, wanted = cleaned[0]
+        state_name, wanted, marks = cleaned[0]
         return validate_request(
             state=state_name,
             districts=wanted,
+            blocks=[b for names in marks.values() for b in (names or [])],
             sites=sites,
             aliases=aliases,
             report=report,
@@ -561,8 +701,9 @@ def validate_coverage_request(
 
     parts: list[AreaPart] = []
     state_names: list[str] = []
+    details: list[DistrictDetail] = []
 
-    for state_name, wanted in cleaned:
+    for state_name, wanted, marks in cleaned:
         # ---- Check 1a, per state --------------------------------------------
         state_row = _resolve_state(state=state_name, aliases=aliases, report=report)
         if state_row is None:
@@ -616,6 +757,27 @@ def validate_coverage_request(
         # ---- Check 5, per state ---------------------------------------------
         _check_geometry(report, districts, f"districts of {state_display}")
 
+        # ---- Check 3, per chosen district -----------------------------------
+        # Each chosen district gets a map of its own at district scale, which
+        # is the only scale a block can be drawn and named at.
+        if block_detail:
+            marks_by_key = {name_key(k): v for k, v in marks.items()}
+            for lgd, district_display in zip(lgds, names):
+                district_row = districts[districts["lgd"].astype("int64") == int(lgd)].iloc[0]
+                detail = _detail_for_district(
+                    state_display=state_display,
+                    district_lgd=int(lgd),
+                    district_display=district_display,
+                    district_row=district_row,
+                    stated=marks_by_key.get(name_key(district_display)) or [],
+                    references=references,
+                    aliases=aliases,
+                    report=report,
+                )
+                if detail is None:
+                    return report, None
+                details.append(detail)
+
         parts.append(
             AreaPart(
                 state_name=state_display,
@@ -656,6 +818,29 @@ def validate_coverage_request(
         unit_label="district",
     )
 
+    # ---- Check 4, continued: which block each site really falls in ----------
+    # The overview can only say which district a site is in. Its district's own
+    # block map can say which block, so that is worked out here rather than
+    # left to the reader.
+    for site in resolved_sites:
+        try:
+            point = Point(float(site["lon"]), float(site["lat"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+        for detail in details:
+            if not detail.district_row["geometry"].contains(point):
+                continue
+            detail.sites.append(site)
+            if detail.units_available:
+                hit = detail.units[detail.units.geometry.contains(point)]
+                if len(hit):
+                    report.info(
+                        "sites",
+                        f"{site.get('name')} falls in {display(hit.iloc[0]['name'])} "
+                        f"{detail.unit_label} of {detail.district_name}.",
+                    )
+            break
+
     if report.errors:
         return report, None
 
@@ -685,6 +870,7 @@ def validate_coverage_request(
         target_district_keys=keys_seen,
         area_parts=parts,
         target_district_lgds=[int(lgd) for lgd in target_lgds],
+        district_details=details,
     )
 
 

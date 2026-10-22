@@ -34,6 +34,7 @@ from pathlib import Path
 
 import geopandas as gpd
 import matplotlib
+import pandas as pd
 from shapely.geometry import Point
 
 matplotlib.use("Agg")
@@ -46,7 +47,7 @@ from . import data as data_module  # noqa: E402
 from .names import display  # noqa: E402
 from .style import Brand, india_lcc, local_crs  # noqa: E402
 
-__all__ = ["render_map", "RenderResult"]
+__all__ = ["render_map", "RenderResult", "slug"]
 
 # Simplification per panel, in metres. One printed pixel at 600 dpi across a
 # 3.5 inch panel is roughly 1.4 km for India, 160 m for a state and 25 m for a
@@ -118,6 +119,11 @@ class Panel:
     # Larger areas the panel covers, named so a reader can tell them apart.
     # Used by the multi-state coverage map to label the states themselves.
     area_labels: gpd.GeoDataFrame | None = None
+    # Finer units drawn inside the highlighted ones and never labelled. The
+    # coverage map uses this to show the blocks of a marked district: at that
+    # scale they are a texture, not something a name could be read off.
+    sublayer: gpd.GeoDataFrame | None = None
+    sublayer_mask: object = None
     # Overrides the brand's label density for this panel only.
     label_density: str | None = None
 
@@ -287,8 +293,11 @@ def _render_coverage(*, target, config: dict, brand: Brand, output_dir: Path) ->
 
     context = None
     area_labels = None
+    sublayer = None
+    sublayer_mask = None
     extent = _extent(districts.total_bounds)
     if multi_state:
+        sublayer, sublayer_mask = _coverage_sublayer(target, crs)
         context, area_labels, country = _coverage_context(target, crs)
         extent = _widen_extent(
             extent,
@@ -313,6 +322,8 @@ def _render_coverage(*, target, config: dict, brand: Brand, output_dir: Path) ->
         # paper between them where the country should be.
         context=context,
         area_labels=area_labels,
+        sublayer=sublayer,
+        sublayer_mask=sublayer_mask,
         # Only the districts the programme runs in are named. Three states'
         # worth of district labels is unreadable at A4, and the question this
         # map answers is where the work is, not what every district is called.
@@ -380,6 +391,13 @@ def _render_coverage(*, target, config: dict, brand: Brand, output_dir: Path) ->
     files = _write_figure(figure, output_dir, name)
     plt.close(figure)
 
+    # Then a map per chosen district, at the only scale a block can be named
+    # at. The overview above shows where the work is; these show what it is.
+    if multi_state and getattr(target, "district_details", []):
+        files += _write_detail_maps(
+            target, config=config, brand=brand, output_dir=output_dir, name=name
+        )
+
     notes.append(f"Source line: {source_line}")
     if multi_state:
         notes.append(
@@ -395,6 +413,26 @@ def _render_coverage(*, target, config: dict, brand: Brand, output_dir: Path) ->
             "Only the marked districts are labelled; three states of district "
             "labels does not stay legible at A4."
         )
+        details = getattr(target, "district_details", [])
+        if details:
+            drawn = sum(len(d.units) for d in details if d.units_available)
+            notes.append(
+                f"Block detail: {drawn} units drawn inside the marked districts, "
+                f"unlabelled at this scale, and one map per district written "
+                f"beside this one ({len(details)} of them)."
+            )
+            for detail in details:
+                if not detail.units_available:
+                    notes.append(
+                        f"{detail.district_name}: no blocks published, mapped at "
+                        f"district level."
+                    )
+                    continue
+                marked = ", ".join(display(n) for n in detail.marked_names) or "none"
+                notes.append(
+                    f"{detail.district_name}: {len(detail.units)} "
+                    f"{detail.unit_label}s, marked: {marked}."
+                )
     else:
         notes.append(
             f"Map type: state coverage, {len(target.target_district_keys)} of "
@@ -501,6 +539,238 @@ def _coverage_context(target, crs):
     return states[~codes.isin(chosen)], states[codes.isin(chosen)], states.total_bounds
 
 
+def _coverage_sublayer(target, crs):
+    """The blocks of every marked district, for drawing inside the highlights.
+
+    Returns the units and a mask of the ones chosen, or ``(None, None)`` when
+    no block detail was worked out. Districts whose blocks are not published
+    simply contribute nothing, which leaves them a plain filled shape.
+    """
+    details = [d for d in getattr(target, "district_details", []) if d.units_available]
+    if not details:
+        return None, None
+
+    frames = []
+    for detail in details:
+        units = detail.units.copy()
+        units["is_marked"] = units["name"].isin(detail.marked_names)
+        frames.append(units[["name", "is_marked", "geometry"]])
+
+    units = gpd.GeoDataFrame(
+        pd.concat(frames, ignore_index=True), crs=frames[0].crs
+    ).to_crs(crs)
+    units["geometry"] = units.geometry.simplify(
+        SIMPLIFY_STATE_M, preserve_topology=True
+    )
+    units = _repair(units)
+    return units, units["is_marked"]
+
+
+def _detail_panels(target, brand: Brand):
+    """One district-scale panel per chosen district, where blocks are legible.
+
+    A block is about 16 km across. On a map spanning several states that is
+    around a millimetre; on a map of its own district it is 40, which is what
+    makes the difference between a boundary you can see and a name you can
+    read.
+    """
+    built = []
+    for detail in getattr(target, "district_details", []):
+        if detail.units_available:
+            units = detail.units.copy()
+            crs = local_crs(units)
+            units = units.to_crs(crs)
+            units["geometry"] = units.geometry.simplify(
+                SIMPLIFY_DISTRICT_M, preserve_topology=True
+            )
+            units = _repair(units)
+
+            mask = units["name"].isin(detail.marked_names)
+            panel = Panel(
+                kind="district",
+                caption=f"{detail.district_name} district",
+                frame=units,
+                crs=crs,
+                highlight_mask=mask,
+                highlight_colours=(
+                    brand.highlight_colours(int(mask.sum())) or [brand.highlight]
+                ),
+                extent=_extent(units.total_bounds),
+                sites=detail.sites,
+                unit_label=detail.unit_label,
+                footnote=(
+                    None
+                    if detail.unit_level == "block"
+                    else (
+                        "Sub-districts (tehsils) shown: block boundaries are not "
+                        f"published for this district. They cover "
+                        f"{detail.unit_coverage * 100:.0f}% of it."
+                    )
+                ),
+            )
+        else:
+            # No block layer for this district. The map shows the district on
+            # its own, outlined, and says why on its face - the same answer
+            # the three-panel map gives.
+            outline = gpd.GeoDataFrame(
+                {
+                    "name": [detail.district_name],
+                    "geometry": [detail.district_row["geometry"]],
+                },
+                crs=target.districts.crs,
+            )
+            crs = local_crs(outline)
+            outline = outline.to_crs(crs)
+            outline["geometry"] = outline.geometry.simplify(
+                SIMPLIFY_DISTRICT_M, preserve_topology=True
+            )
+            outline = _repair(outline)
+
+            panel = Panel(
+                kind="district",
+                caption=f"{detail.district_name} district",
+                frame=outline,
+                crs=crs,
+                highlight_mask=outline["name"].isin([]),
+                highlight_colours=[brand.highlight],
+                extent=_extent(outline.total_bounds),
+                sites=detail.sites,
+                footnote="Block boundaries are not published for this district.",
+                outline_only=True,
+                unit_label=detail.unit_label,
+            )
+        built.append((detail, panel))
+    return built
+
+
+def _write_detail_maps(target, *, config, brand: Brand, output_dir: Path, name: str):
+    """Write a block map for each chosen district, beside the overview."""
+    written: list[Path] = []
+    margin = brand.layout("margin_in")
+    overall = config.get("title") or ""
+
+    for detail, panel in _detail_panels(target, brand):
+        panel_h = min(COVERAGE_MAX_HEIGHT_IN, PANEL_ALONE_HEIGHT_IN)
+        panel_w = panel_h * panel.aspect
+        width = max(panel_w + 2 * margin, COVERAGE_MIN_WIDTH_IN)
+        height = panel_h + BAND_TOP_IN + BAND_BOTTOM_IN
+
+        figure = plt.figure(figsize=(width, height), facecolor=brand.background)
+        panel.ax = figure.add_axes(
+            [margin / width, BAND_BOTTOM_IN / height, panel_w / width, panel_h / height],
+            facecolor=brand.panel_fill,
+        )
+        caption, panel.caption = panel.caption, ""  # the title says it instead
+        _draw_panel(panel, brand)
+        panel.caption = caption
+
+        # Names the district, its state and what is being shown, because this
+        # sheet travels on its own.
+        title = (
+            f"{detail.district_name} district, {detail.state_name}: "
+            f"{detail.unit_label}s"
+            if detail.units_available
+            else f"{detail.district_name} district, {detail.state_name}"
+        )
+        if overall:
+            title = f"{title} — {overall}"
+
+        _draw_title_block(
+            figure,
+            title,
+            brand,
+            margin=margin,
+            width=width,
+            height=height,
+            rule_right=(
+                width - margin - brand.logo_width_in - brand.logo_clear_space_in
+                if brand.show_logo and brand.logo_position == "top-right"
+                else None
+            ),
+        )
+        _draw_detail_legend(figure, panel, brand, detail=detail)
+
+        if brand.show_logo:
+            _draw_logo(figure, brand, margin=margin, width=width, height=height)
+
+        figure.text(
+            margin / width,
+            0.22 / height,
+            _source_line(),
+            ha="left",
+            va="center",
+            fontsize=brand.size("source_line"),
+            color=brand.text_muted,
+        )
+
+        written += _write_figure(figure, output_dir, f"{name}_{slug(detail.district_name)}")
+        plt.close(figure)
+
+    return written
+
+
+def slug(value: str) -> str:
+    """A file-name-safe form of a place name."""
+    kept = [c.lower() if c.isalnum() else "_" for c in str(value)]
+    return "".join(kept).strip("_").replace("__", "_") or "district"
+
+
+def _draw_detail_legend(figure, panel: Panel, brand: Brand, *, detail) -> None:
+    """Legend for one district's block map."""
+    handles = []
+    if panel.outline_only:
+        handles.append(
+            Line2D([], [], marker="s", linestyle="none", markerfacecolor="none",
+                   markeredgecolor=brand.highlight, markeredgewidth=1.4,
+                   color="none", markersize=6,
+                   label=f"{detail.district_name} district")
+        )
+    else:
+        for name, colour in zip(detail.marked_names, panel.highlight_colours):
+            handles.append(
+                Line2D([], [], marker="s", linestyle="none", color=colour,
+                       markersize=6, label=f"{display(name)} {panel.unit_label}")
+            )
+        handles.append(
+            Line2D([], [], marker="s", linestyle="none", color=brand.unit_fill,
+                   markersize=6,
+                   label=f"Other {panel.unit_label}s"
+                   if detail.marked_names
+                   else f"{panel.unit_label.capitalize()}s")
+        )
+
+    seen = set()
+    for site in panel.sites:
+        site_type = (site.get("type") or "site").lower()
+        if site_type in seen:
+            continue
+        seen.add(site_type)
+        handles.append(
+            Line2D([], [], marker=brand.marker(site_type), linestyle="none",
+                   color=brand.site_marker, markersize=5,
+                   label=site_type[:1].upper() + site_type[1:])
+        )
+
+    if not handles:
+        return
+
+    box = panel.ax.get_position()
+    legend = figure.legend(
+        handles=handles,
+        loc="upper left",
+        bbox_to_anchor=(box.x0, box.y0 - 0.022),
+        frameon=False,
+        fontsize=brand.size("legend"),
+        handletextpad=0.6,
+        labelspacing=0.4,
+        borderpad=0.0,
+        ncols=min(len(handles), 3),
+        columnspacing=1.5,
+    )
+    for text in legend.get_texts():
+        text.set_color(brand.text_secondary)
+
+
 def _widen_extent(extent, *, min_aspect, limit=None):
     """Widen a tight extent so the sheet is not a ribbon of white paper.
 
@@ -549,6 +819,18 @@ def _draw_coverage_legend(figure, panel: Panel, brand: Brand, *, target) -> None
         Line2D([], [], marker="s", linestyle="none", color=brand.unit_fill,
                markersize=6, label="Other districts"),
     ]
+    if panel.sublayer is not None and len(panel.sublayer):
+        if panel.sublayer_mask is not None and bool(panel.sublayer_mask.any()):
+            handles.insert(
+                1,
+                Line2D([], [], marker="s", linestyle="none",
+                       color=brand.highlight_secondary, markersize=6,
+                       label="Blocks covered"),
+            )
+        handles.append(
+            Line2D([], [], marker="_", linestyle="none", color=brand.text_muted,
+                   markersize=7, label="Block boundaries (named on each district map)")
+        )
     if panel.context is not None and not panel.context.empty:
         # Across several states the paler grey behind them is the rest of the
         # country, which is a different thing from a district not covered.
@@ -807,6 +1089,29 @@ def _draw_panel(panel: Panel, brand: Brand) -> None:
             zorder=2,
         )
 
+    # Blocks inside the marked districts. Drawn over the district fill so the
+    # subdivision shows, and never labelled - at coverage scale a block is
+    # about a millimetre across, so a name would be a claim the map cannot
+    # support. The district's own map is where the names belong.
+    if panel.sublayer is not None and len(panel.sublayer):
+        panel.sublayer.plot(
+            ax=ax,
+            facecolor="none",
+            edgecolor=brand.unit_edge,
+            linewidth=brand.width("unit_edge"),
+            zorder=3,
+        )
+        if panel.sublayer_mask is not None:
+            marked = panel.sublayer[panel.sublayer_mask]
+            if len(marked):
+                marked.plot(
+                    ax=ax,
+                    facecolor=brand.highlight_secondary,
+                    edgecolor=brand.unit_edge,
+                    linewidth=brand.width("unit_edge"),
+                    zorder=4,
+                )
+
     # Fix the view before anything is measured against it.
     x0, x1, y0, y1 = panel.extent
     ax.set_xlim(x0, x1)
@@ -971,6 +1276,82 @@ def _label_units(
             shrinkB=2,
         ),
     )
+
+    _lift_labels_off_highlights(panel, brand, texts)
+
+
+def _lift_labels_off_highlights(panel: Panel, brand: Brand, texts) -> None:
+    """Settle any neighbour's label that ended up over a highlighted unit.
+
+    The label pass can leave a grey label on the teal fill, where grey on dark
+    teal cannot be read in print. There are two cases and they want different
+    answers. A label sitting wholly on the fill turns white, which is how this
+    brand sets text on a dark ground. A label straddling the boundary cannot
+    be fixed by either colour - white is lost on the light grey, grey is lost
+    on the teal - so it is pushed to whichever side of its anchor keeps it off
+    the fill, by setting its alignment rather than moving it, which leaves any
+    leader line still pointing where it was.
+
+    Positions are only real after the adjustment pass, so this runs last.
+    """
+    targets = panel.frame[panel.highlight_mask]
+    if not len(targets):
+        return
+
+    filled = targets.geometry.union_all()
+    for text in texts:
+        if text.get_color() == brand.text:
+            continue  # a target's own label, already set for this fill
+
+        x, y = text.get_position()
+        half = _text_half_width(text, panel.ax)
+        if half <= 0:
+            continue
+
+        # Where the text would sit centred, and where it would sit if pushed
+        # to one side of its anchor.
+        centred = _segment(x - half, x + half, y)
+        leftward = _segment(x - 2 * half, x, y)
+        rightward = _segment(x, x + 2 * half, y)
+
+        if filled.contains(Point(x, y)):
+            # On the fill. White works, but only if the whole label is on it.
+            if filled.covers(centred):
+                pass
+            elif filled.covers(rightward):
+                text.set_ha("left")
+            elif filled.covers(leftward):
+                text.set_ha("right")
+            text.set_color(brand.background)
+            continue
+
+        # Off the fill, but the text may still run across it. Keep it grey and
+        # move it to whichever side is clear.
+        if not filled.intersects(centred):
+            continue
+        if not filled.intersects(rightward):
+            text.set_ha("left")
+        elif not filled.intersects(leftward):
+            text.set_ha("right")
+        else:
+            text.set_color(brand.background)
+
+
+def _segment(x0: float, x1: float, y: float):
+    """A horizontal line at the height a label is drawn, for overlap tests."""
+    from shapely.geometry import LineString
+
+    return LineString([(x0, y), (x1, y)])
+
+
+def _text_half_width(text, ax) -> float:
+    """Half the drawn width of a label, in data units."""
+    figure = ax.figure
+    renderer = figure.canvas.get_renderer()
+    box = text.get_window_extent(renderer=renderer)
+    inverse = ax.transData.inverted()
+    (x0, _), (x1, _) = inverse.transform([[box.x0, box.y0], [box.x1, box.y0]])
+    return abs(x1 - x0) / 2.0
 
 
 def _labels_to_draw(panel: Panel, frame, highlight, brand: Brand):

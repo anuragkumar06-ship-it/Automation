@@ -65,7 +65,16 @@ def coverage_areas(config: dict) -> list[dict] | None:
         districts = entry.get("districts")
         if districts is None and entry.get("district"):
             districts = [entry["district"]]
-        cleaned.append({"state": name, "districts": list(districts or [])})
+        area = {"state": name, "districts": list(districts or [])}
+        marks = entry.get("blocks")
+        if isinstance(marks, dict):
+            # Blocks to mark, keyed by the district they belong to. Keyed
+            # rather than a flat list because a block name is only unique
+            # inside its own district.
+            area["blocks"] = {
+                str(k): list(v or []) for k, v in marks.items() if str(k).strip()
+            }
+        cleaned.append(area)
     return cleaned or None
 
 
@@ -84,6 +93,9 @@ def validate_config(config: dict, *, aliases, report=None):
             sites=list(config.get("sites") or []),
             aliases=aliases,
             report=report,
+            # On unless turned off: the overview alone cannot show a block, so
+            # without these the map does not answer the question it was asked.
+            block_detail=config.get("block_detail", True) is not False,
         )
 
     if areas:
