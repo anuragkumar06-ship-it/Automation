@@ -670,6 +670,33 @@ def _show_report(report) -> None:
                 st.markdown(f"- **{issue.check}** — {issue.message}")
 
 
+if go:
+    config = _build_config()
+    with st.spinner(
+        "Checking the names and coordinates, then drawing. About 15 seconds."
+    ):
+        outcome = run_from_config(config, force=force, output_root=_output_root())
+
+    # Kept in session_state rather than drawn straight from here. Clicking a
+    # download button reruns the whole script, and a button reads True only on
+    # the run it was clicked - so everything drawn inside "if go" disappeared
+    # the moment you downloaded one file, taking the other formats with it.
+    st.session_state.last_result = {
+        "report": outcome["report"],
+        "rendered": outcome["rendered"],
+        "output_dir": str(outcome.get("output_dir") or ""),
+        "name": config.get("output_name") or "locator_map",
+        "state": config.get("state"),
+        "district": district_name,
+        "made_for": "; ".join(
+            f"{area['state']}: {', '.join(area['districts'])}" for area in areas
+        ),
+        "districts": [d for area in areas for d in area["districts"]],
+    }
+
+result = None if check_only else st.session_state.get("last_result")
+
+
 if check_only:
     from locator.cli import validate_config
     from locator.names import load_aliases
@@ -684,16 +711,12 @@ if check_only:
     if not report.errors and not report.warnings:
         st.success("Everything checks out. Press “Make the map”.")
 
-elif go:
-    config = _build_config()
-    with st.spinner("Checking the names and coordinates, then drawing. About 15 seconds."):
-        outcome = run_from_config(config, force=force, output_root=_output_root())
-
+elif result:
     st.subheader("Checks")
-    _show_report(outcome["report"])
+    _show_report(result["report"])
 
-    if not outcome["rendered"]:
-        if outcome["report"].errors:
+    if not result["rendered"]:
+        if result["report"].errors:
             st.info("Fix the problems above and try again.")
         else:
             st.info(
@@ -702,11 +725,19 @@ elif go:
                 "“Make the map” again."
             )
     else:
-        output_dir = Path(outcome["output_dir"])
-        name = config["output_name"]
+        output_dir = Path(result["output_dir"])
+        name = result["name"]
 
         st.markdown(theme.rule_html(), unsafe_allow_html=True)
         st.subheader("Your map")
+        # What this one was drawn from, so a map still on screen after the
+        # selection on the left has moved on cannot be mistaken for the new one.
+        if result.get("made_for"):
+            st.markdown(
+                f'<div class="cf-caption">Drawn for {result["made_for"]}. Change '
+                "anything on the left and press Make the map again.</div>",
+                unsafe_allow_html=True,
+            )
         preview = output_dir / f"{name}_300dpi.png"
         if preview.exists():
             st.markdown('<div class="cf-map">', unsafe_allow_html=True)
@@ -754,16 +785,15 @@ elif go:
                 unsafe_allow_html=True,
             )
             _download_row("India", f"{name}_india", "")
-            _download_row(f"{config['state']}", f"{name}_state", "")
-            _download_row(f"{district_name} district", f"{name}_district", "")
+            _download_row(f"{result['state']}", f"{name}_state", "")
+            _download_row(f"{result['district']} district", f"{name}_district", "")
         else:
             _download_row("The map", name, "")
 
             # A multi-state map writes one block map per district beside it.
             detail_rows = [
                 (district, f"{name}_{slug(district)}")
-                for area in areas
-                for district in area["districts"]
+                for district in result["districts"]
                 if (output_dir / f"{name}_{slug(district)}.svg").exists()
             ]
             if detail_rows:
@@ -777,6 +807,24 @@ elif go:
                 )
                 for district, stem in detail_rows:
                     _download_row(f"{district} district", stem, "")
+
+        bundle = output_dir / f"{name}_all_maps.pdf"
+        if bundle.exists():
+            st.markdown(theme.rule_html(), unsafe_allow_html=True)
+            st.markdown("**Everything in one PDF**")
+            st.markdown(
+                '<div class="cf-caption">Every map above in a single file, in the '
+                "order they appear here: the main map first, then one page per "
+                "district. One attachment instead of a folder.</div>",
+                unsafe_allow_html=True,
+            )
+            st.download_button(
+                "All maps (PDF)",
+                data=bundle.read_bytes(),
+                file_name=bundle.name,
+                use_container_width=True,
+                key="dl_all_maps",
+            )
 
         log_file = output_dir / "render_log.txt"
         if log_file.exists():

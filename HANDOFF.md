@@ -53,7 +53,7 @@ Two front ends, one codebase:
 | Thing | State |
 |---|---|
 | Local app | Works. Current on all features. |
-| Tests | 121 passing. Run with `.venv/Scripts/python.exe -m pytest tests/ -q` |
+| Tests | 123 passing. Run with `.venv/Scripts/python.exe -m pytest tests/ -q` |
 | GitHub | In sync. `anuragkumar06-ship-it/Automation`, branch `main`, HEAD `5ca32e1`, tree clean. |
 | Live site | https://map-cognizant.streamlit.app/ — **needs a manual reboot** (see below) |
 | Data coverage | All 36 states/UTs, 785 districts, 7,146 blocks |
@@ -126,7 +126,7 @@ Automation/
   maps/              # madurai, bhagalpur, balotra, karnataka_coverage,
                      #   multi_state_coverage
   assets/            # the CF logo
-  tests/             # 121 tests
+  tests/             # 123 tests
   output/            # gitignored
   .streamlit/config.toml   # CF palette for the dashboard chrome
 ```
@@ -232,6 +232,11 @@ Dadra & Nagar Haveli and Daman & Diu differently, and joining by name loses it.
   title, legend and source line. HR asked for this; they need the panels
   individually, not only as a strip.
 - `_write_figure()` — writes SVG, PDF, PNG at 300 dpi and PNG at 600 dpi
+- `_write_bundle()` — every map of one job in a single PDF (`<name>_all_maps.pdf`),
+  main map first, then one page per district. Uses matplotlib's own `PdfPages`,
+  so it adds no dependency. The figure writers therefore **return their figures
+  instead of closing them**; the caller closes them after the bundle is written.
+  Pages keep their own sizes, because the maps are different shapes.
 - `_frame_panel()` — **must call `ax.set_xlabel("")` and `ax.set_ylabel("")`**.
   Matplotlib otherwise prints "Easting [metre]" / "Northing [metre]" on every
   panel. This was a regression once already; do not drop it again.
@@ -287,6 +292,12 @@ Notes that matter:
   `session_state`. Bump it whenever the shape of the sites table changes.
 - `_output_root()` gives each session its own temp directory, so two people
   rendering at once do not overwrite each other.
+- **The render result lives in `st.session_state["last_result"]`, not in the
+  `if go:` branch.** A `st.download_button` click reruns the script, and a
+  button reads True only on the run it was clicked — so results drawn inside
+  `if go:` vanished as soon as the user downloaded one file, and they could
+  not fetch the other formats. Anything the download section needs is stored
+  in that dict, not read back off the sidebar widgets.
 - District selection is a **multiselect**. One district → three-panel map.
   Several → coverage map.
 - `_build_config()` sends both `districts` (list) and `district` (first one), so
@@ -327,6 +338,7 @@ Places (New), stopping at the first usable answer.
 | "Easting [metre]" on panels | `set_axis_off()` dropped when frames were added | explicit `set_xlabel("")` |
 | Coverage map 10 in tall | fitted one dimension only | fit both, then trim the page |
 | Live KeyError | new `app.py` against cached old `cli.py` | defensive reads + reboot |
+| Maps vanished after one download | results drawn inside `if go:`; a download rerun makes the button False | result kept in `session_state` |
 
 ### The GRH lesson
 

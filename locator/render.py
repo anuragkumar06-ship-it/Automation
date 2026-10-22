@@ -216,14 +216,22 @@ def render_map(*, target, config: dict, brand: Brand, report, output_dir: Path) 
 
     name = config.get("output_name") or "locator_map"
     files = _write_figure(figure, output_dir, name)
-    plt.close(figure)
 
     # Each panel on its own as well as the strip, so a proposal can use just
     # the district map without cropping the other two off by hand.
-    files += _write_panels_separately(
+    panel_files, panel_figures = _write_panels_separately(
         panels, config=config, brand=brand, output_dir=output_dir, name=name,
         target=target,
     )
+    files += panel_files
+
+    # And everything in one PDF, in reading order, for sending as a single
+    # attachment. The figures stay open until it is written.
+    bundle = [figure] + panel_figures
+    if len(bundle) > 1:
+        files.append(_write_bundle(bundle, output_dir, f"{name}_all_maps"))
+    for drawn in bundle:
+        plt.close(drawn)
 
     notes.append(f"Source line: {source_line}")
     notes.append(
@@ -389,14 +397,22 @@ def _render_coverage(*, target, config: dict, brand: Brand, output_dir: Path) ->
 
     name = config.get("output_name") or "coverage_map"
     files = _write_figure(figure, output_dir, name)
-    plt.close(figure)
+    bundle = [figure]
 
     # Then a map per chosen district, at the only scale a block can be named
     # at. The overview above shows where the work is; these show what it is.
     if multi_state and getattr(target, "district_details", []):
-        files += _write_detail_maps(
+        detail_files, detail_figures = _write_detail_maps(
             target, config=config, brand=brand, output_dir=output_dir, name=name
         )
+        files += detail_files
+        bundle += detail_figures
+
+    # The overview first, then each district, in one PDF.
+    if len(bundle) > 1:
+        files.append(_write_bundle(bundle, output_dir, f"{name}_all_maps"))
+    for drawn in bundle:
+        plt.close(drawn)
 
     notes.append(f"Source line: {source_line}")
     if multi_state:
@@ -452,8 +468,12 @@ def _write_panels_separately(
 
     Redrawn rather than cropped, so each one gets its own title, logo, scale
     bar and source line and stands on its own in a document.
+
+    Returns the files written and the figures, which are left open so they can
+    go into the combined PDF before being closed.
     """
     written: list[Path] = []
+    drawn: list = []
     margin = brand.layout("margin_in")
     overall = config.get("title") or ""
 
@@ -513,9 +533,9 @@ def _write_panels_separately(
         )
 
         written += _write_figure(figure, output_dir, f"{name}_{panel.kind}")
-        plt.close(figure)
+        drawn.append(figure)
 
-    return written
+    return written, drawn
 
 
 def _coverage_context(target, crs):
@@ -644,8 +664,12 @@ def _detail_panels(target, brand: Brand):
 
 
 def _write_detail_maps(target, *, config, brand: Brand, output_dir: Path, name: str):
-    """Write a block map for each chosen district, beside the overview."""
+    """Write a block map for each chosen district, beside the overview.
+
+    Returns the files written and the figures, left open for the combined PDF.
+    """
     written: list[Path] = []
+    drawn: list = []
     margin = brand.layout("margin_in")
     overall = config.get("title") or ""
 
@@ -704,9 +728,9 @@ def _write_detail_maps(target, *, config, brand: Brand, output_dir: Path, name: 
         )
 
         written += _write_figure(figure, output_dir, f"{name}_{slug(detail.district_name)}")
-        plt.close(figure)
+        drawn.append(figure)
 
-    return written
+    return written, drawn
 
 
 def slug(value: str) -> str:
@@ -865,6 +889,23 @@ def _draw_coverage_legend(figure, panel: Panel, brand: Brand, *, target) -> None
     )
     for text in legend.get_texts():
         text.set_color(brand.text_secondary)
+
+
+def _write_bundle(figures, output_dir: Path, name: str) -> Path:
+    """Every map of one job in a single PDF, in reading order.
+
+    One file to attach to an email or drop into a proposal, instead of a
+    folder of them. Each map keeps its own page size, because they are
+    different shapes and forcing them onto one page size would either letterbox
+    them or distort them.
+    """
+    from matplotlib.backends.backend_pdf import PdfPages
+
+    path = output_dir / f"{name}.pdf"
+    with PdfPages(path) as pdf:
+        for figure in figures:
+            pdf.savefig(figure)
+    return path
 
 
 def _write_figure(figure, output_dir: Path, name: str) -> list[Path]:

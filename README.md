@@ -192,6 +192,16 @@ Marked blocks are highlighted on their district's map and on the overview.
 
 If you only want the overview, untick "Also map each district's blocks".
 
+### One PDF with everything in it
+
+Every map also goes into a single PDF, listed as **All maps (PDF)** under the
+download buttons. The main map is the first page, then one page per district,
+in the order they appear on screen. It is there so you can attach one file
+rather than a folder of them.
+
+The separate SVG, PDF and PNG files are still written as before, for when you
+need one particular map on its own.
+
 In a config file, use `districts` (plural) for several districts in one state:
 
 ```yaml

@@ -272,6 +272,49 @@ class TestConfigShape:
         assert target.multi_state
 
 
+class TestCombinedPdf:
+    """Every map of one job in a single PDF, for sending as one attachment."""
+
+    def _figures(self, count):
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        return [plt.figure(figsize=(4, 3)) for _ in range(count)]
+
+    def test_it_writes_one_page_per_map(self, tmp_path):
+        from locator.render import _write_bundle
+        import matplotlib.pyplot as plt
+
+        figures = self._figures(3)
+        try:
+            path = _write_bundle(figures, tmp_path, "everything")
+        finally:
+            for figure in figures:
+                plt.close(figure)
+
+        assert path.exists()
+        data = path.read_bytes()
+        assert data.startswith(b"%PDF")
+        # Read without a PDF library on purpose: nothing in requirements.txt
+        # parses PDFs, and this file is written by matplotlib's own backend.
+        assert b"/Count 3" in data
+
+    def test_it_is_named_after_the_map(self, tmp_path):
+        from locator.render import _write_bundle
+        import matplotlib.pyplot as plt
+
+        figures = self._figures(2)
+        try:
+            path = _write_bundle(figures, tmp_path, "madurai_locator_all_maps")
+        finally:
+            for figure in figures:
+                plt.close(figure)
+
+        assert path.name == "madurai_locator_all_maps.pdf"
+
+
 class TestFraming:
     """A tall, narrow frame is opened out rather than printed as a ribbon."""
 
