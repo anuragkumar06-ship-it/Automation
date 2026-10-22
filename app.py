@@ -140,6 +140,26 @@ def _target_shape(state_lgd: int, chosen: list[str], pairs):
     return merged, tuple(float(v) for v in merged.bounds)
 
 
+def _areas_shape(areas: list[dict]):
+    """The shape a site is tested against, across every state on the map."""
+    shapes = []
+    boxes = []
+    for area in areas:
+        shape, box = _target_shape(area["lgd"], area["districts"], area["pairs"])
+        if shape is not None:
+            shapes.append(shape)
+            boxes.append(box)
+    if not shapes:
+        return None, None
+    if len(shapes) == 1:
+        return shapes[0], boxes[0]
+
+    from shapely.ops import unary_union
+
+    merged = unary_union(shapes)
+    return merged, tuple(float(v) for v in merged.bounds)
+
+
 @st.cache_data(show_spinner=False)
 def _unit_options(district_lgd: int, district_lgd_geom_key: str) -> tuple[list[str], str]:
     """The units the third panel can highlight, and what they are called.
@@ -188,40 +208,85 @@ with st.sidebar:
     st.header("Where is the map?")
 
     state_pairs = _state_options()
-    state_name = st.selectbox(
-        "State or union territory",
-        [name for name, _ in state_pairs],
-        index=[name for name, _ in state_pairs].index("Tamil Nadu")
-        if any(n == "Tamil Nadu" for n, _ in state_pairs)
-        else 0,
-    )
-    state_lgd = dict(state_pairs)[state_name]
-
-    district_pairs = _district_options(state_lgd)
-    if not district_pairs:
-        st.error(f"No districts are available for {state_name}.")
-        st.stop()
-
-    district_names = [name for name, _ in district_pairs]
-    default_district = "Madurai" if "Madurai" in district_names else district_names[0]
-    chosen_districts = st.multiselect(
-        f"Districts ({len(district_names)} in this state)",
-        district_names,
-        default=[default_district],
+    all_state_names = [name for name, _ in state_pairs]
+    chosen_states = st.multiselect(
+        "States or union territories",
+        all_state_names,
+        default=[("Tamil Nadu" if "Tamil Nadu" in all_state_names else all_state_names[0])],
         help=(
-            "One district gives the three-panel locator map. Several give a "
-            "coverage map: the state with each of them marked."
+            "One state gives the locator map, or a coverage map of that state. "
+            "Several give one continuous map covering all of them, with the "
+            "districts you pick in each one marked."
         ),
     )
-    if not chosen_districts:
-        st.warning("Choose at least one district.")
+    if not chosen_states:
+        st.warning("Choose at least one state.")
         st.stop()
 
-    many_districts = len(chosen_districts) > 1
+    multi_state = len(chosen_states) > 1
+
+    # One district picker per state. Keyed by LGD code so a state keeps its own
+    # selection when another is added or removed beside it.
+    areas: list[dict] = []
+    for name in chosen_states:
+        lgd = dict(state_pairs)[name]
+        pairs = _district_options(lgd)
+        if not pairs:
+            st.error(f"No districts are available for {name}.")
+            st.stop()
+
+        names = [n for n, _ in pairs]
+        if multi_state:
+            picked = st.multiselect(
+                f"Districts in {name} ({len(names)})",
+                names,
+                default=[],
+                key=f"districts_{lgd}",
+            )
+        else:
+            default_district = "Madurai" if "Madurai" in names else names[0]
+            picked = st.multiselect(
+                f"Districts ({len(names)} in this state)",
+                names,
+                default=[default_district],
+                help=(
+                    "One district gives the three-panel locator map. Several "
+                    "give a coverage map: the state with each of them marked."
+                ),
+            )
+        areas.append({"state": name, "lgd": lgd, "districts": picked, "pairs": pairs})
+
+    missing = [area["state"] for area in areas if not area["districts"]]
+    if missing:
+        st.warning(
+            "Choose at least one district in " + ", ".join(missing) + "."
+            if multi_state
+            else "Choose at least one district."
+        )
+        st.stop()
+
+    # The rest of the page works from the first state. On a single-state map
+    # that is the only state, and nothing below this line changes.
+    primary = areas[0]
+    state_name = primary["state"]
+    state_lgd = primary["lgd"]
+    district_pairs = primary["pairs"]
+    chosen_districts = primary["districts"]
     district_name = chosen_districts[0]
     district_lgd = dict(district_pairs)[district_name]
+    total_districts = sum(len(area["districts"]) for area in areas)
+    many_districts = multi_state or len(chosen_districts) > 1
 
-    if many_districts:
+    if multi_state:
+        st.markdown(
+            f'<div class="cf-caption">{len(chosen_states)} states chosen, so this '
+            f"will be one map covering all of them with {total_districts} districts "
+            "marked. Only the marked districts are labelled — a full set of "
+            "district labels across several states does not stay legible at A4. "
+            "Blocks and the three-panel layout apply to a single district.</div>",
+            unsafe_allow_html=True,
+        )
+    elif many_districts:
         st.markdown(
             f'<div class="cf-caption">{len(chosen_districts)} districts chosen, so '
             "this will be a coverage map of the state with each one marked. Blocks "
@@ -314,7 +379,7 @@ with st.sidebar:
                 st.session_state.geo_results = []
                 st.warning("Type a place name first.")
             else:
-                shape, bbox = _target_shape(state_lgd, chosen_districts, district_pairs)
+                shape, bbox = _areas_shape(areas)
                 from shapely.geometry import Point
 
                 def _inside(lat, lon):
@@ -507,7 +572,7 @@ def _build_config() -> dict:
     sites, problems = sites_module.sites_from_table(sites_table)
     for problem in problems:
         st.warning(problem)
-    return {
+    config = {
         "state": state_name,
         "districts": list(chosen_districts),
         # The singular spelling is kept alongside for anything still reading
@@ -519,6 +584,16 @@ def _build_config() -> dict:
         "title": title.strip() or None,
         "output_name": output_name.strip() or "locator_map",
     }
+    if multi_state:
+        # Several states: the per-state lists are what the map is drawn from.
+        # 'state' and 'districts' above still name the first one, so a reader
+        # that does not know about 'coverage' gets a sensible single-state map
+        # rather than an error.
+        config["coverage"] = [
+            {"state": area["state"], "districts": list(area["districts"])}
+            for area in areas
+        ]
+    return config
 
 
 def _show_report(report) -> None:
@@ -542,18 +617,14 @@ def _show_report(report) -> None:
 
 
 if check_only:
+    from locator.cli import validate_config
     from locator.names import load_aliases
-    from locator.validate import validate_request
 
     config = _build_config()
     aliases = load_aliases(PROJECT_ROOT / "data" / "aliases.csv")
-    report, _ = validate_request(
-        state=config["state"],
-        district=config["district"],
-        blocks=config["blocks"],
-        sites=config["sites"],
-        aliases=aliases,
-    )
+    # The same dispatch the render uses, so what the check reports and what
+    # the map is drawn from can never disagree.
+    report, _ = validate_config(config, aliases=aliases)
     st.subheader("Checks")
     _show_report(report)
     if not report.errors and not report.warnings:

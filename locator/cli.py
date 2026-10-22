@@ -26,13 +26,86 @@ from . import data as data_module
 from .names import load_aliases
 from .render import render_map
 from .style import load_brand
-from .validate import ValidationReport, validate_request
+from .validate import ValidationReport, validate_coverage_request, validate_request
 
-__all__ = ["main", "run_from_config", "load_config"]
+__all__ = ["main", "run_from_config", "load_config", "validate_config", "coverage_areas"]
 
 
 def project_root() -> Path:
     return Path(__file__).resolve().parent.parent
+
+
+def coverage_areas(config: dict) -> list[dict] | None:
+    """The per-state district lists from a config, or ``None`` if it has none.
+
+    ``coverage`` is the multi-state form:
+
+    .. code-block:: yaml
+
+        coverage:
+          - state: Karnataka
+            districts: [Bengaluru Urban, Mysuru]
+          - state: Telangana
+            districts: [Hyderabad]
+
+    The older ``state`` plus ``districts`` form is untouched and still means
+    one state.
+    """
+    areas = config.get("coverage")
+    if not isinstance(areas, list) or not areas:
+        return None
+
+    cleaned: list[dict] = []
+    for entry in areas:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("state") or "").strip()
+        if not name:
+            continue
+        districts = entry.get("districts")
+        if districts is None and entry.get("district"):
+            districts = [entry["district"]]
+        cleaned.append({"state": name, "districts": list(districts or [])})
+    return cleaned or None
+
+
+def validate_config(config: dict, *, aliases, report=None):
+    """Run the right checks for this config.
+
+    Several states means a multi-state coverage map. One state, however it is
+    spelled in the config, goes down the single-state path that was already
+    here.
+    """
+    areas = coverage_areas(config)
+
+    if areas and len(areas) > 1:
+        return validate_coverage_request(
+            areas=areas,
+            sites=list(config.get("sites") or []),
+            aliases=aliases,
+            report=report,
+        )
+
+    if areas:
+        only = areas[0]
+        return validate_request(
+            state=only["state"],
+            districts=only["districts"],
+            blocks=list(config.get("blocks") or []),
+            sites=list(config.get("sites") or []),
+            aliases=aliases,
+            report=report,
+        )
+
+    return validate_request(
+        state=config["state"],
+        district=config.get("district"),
+        districts=config.get("districts"),
+        blocks=list(config.get("blocks") or []),
+        sites=list(config.get("sites") or []),
+        aliases=aliases,
+        report=report,
+    )
 
 
 def load_config(path: str | Path) -> dict:
@@ -49,9 +122,16 @@ def load_config(path: str | Path) -> dict:
     if not isinstance(config, dict):
         raise SystemExit(f"{path} is not a valid map config. Compare it with maps/madurai.yaml.")
 
-    if not config.get("state"):
-        raise SystemExit(f"{path} is missing the 'state' setting.")
-    if not config.get("district") and not config.get("districts"):
+    if not config.get("state") and not coverage_areas(config):
+        raise SystemExit(
+            f"{path} is missing the 'state' setting. For a map covering several "
+            f"states, use 'coverage' with one entry per state instead."
+        )
+    if (
+        config.get("state")
+        and not config.get("district")
+        and not config.get("districts")
+    ):
         raise SystemExit(
             f"{path} needs either 'district' for one district, or 'districts' "
             f"for several."
@@ -86,19 +166,11 @@ def run_from_config(
     # an older copy of this module still held in memory, and a missing key
     # then crashes with a bare KeyError that tells the user nothing. Every
     # lookup here tolerates the other spelling.
-    if not config.get("state"):
+    if not config.get("state") and not coverage_areas(config):
         raise ValueError("The map needs a state.")
 
     report = ValidationReport()
-    report, target = validate_request(
-        state=config["state"],
-        district=config.get("district"),
-        districts=config.get("districts"),
-        blocks=list(config.get("blocks") or []),
-        sites=list(config.get("sites") or []),
-        aliases=aliases,
-        report=report,
-    )
+    report, target = validate_config(config, aliases=aliases, report=report)
 
     outcome = {"report": report, "target": target, "files": [], "rendered": False}
 
@@ -129,6 +201,13 @@ def run_from_config(
     return outcome
 
 
+def _states_asked(config: dict) -> str:
+    """What the config asked for, for the log's inputs section."""
+    if config.get("state"):
+        return str(config["state"])
+    return ", ".join(area["state"] for area in (coverage_areas(config) or []))
+
+
 def _render_log(*, config, report, target, result) -> str:
     lines = [
         "Locator map render log",
@@ -137,7 +216,7 @@ def _render_log(*, config, report, target, result) -> str:
         "",
         "Inputs",
         "-" * 60,
-        f"State:    {config.get('state')}  ->  {target.state_name}",
+        f"State:    {_states_asked(config)}  ->  {target.state_name}",
         f"District: {', '.join(target.district_names)}"
         + (f" (LGD {target.district_lgd})" if not target.multi_district else ""),
         f"Blocks:   {', '.join(config.get('blocks') or []) or '(none)'}",
@@ -236,14 +315,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "check":
         aliases = load_aliases(project_root() / "data" / "aliases.csv")
-        report, _ = validate_request(
-            state=config["state"],
-            district=config.get("district"),
-            districts=config.get("districts"),
-            blocks=list(config.get("blocks") or []),
-            sites=list(config.get("sites") or []),
-            aliases=aliases,
-        )
+        report, _ = validate_config(config, aliases=aliases)
         _print_report(report)
         return 1 if report.errors else 0
 

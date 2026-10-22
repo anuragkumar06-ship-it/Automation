@@ -1,0 +1,25 @@
+# A coverage map spanning several states: one continuous panel, with the
+# districts a programme runs in marked in each state.
+#
+# Use this shape when a programme crosses state lines. For one state, use
+# karnataka_coverage.yaml instead - 'state' plus 'districts'.
+#
+# Only the marked districts are labelled. Every district of each chosen state
+# is still drawn, in grey, and the rest of the country sits behind them so
+# there is no blank paper between states that do not touch.
+#
+# Blocks cannot be marked on a coverage map: the block panel shows one
+# district at a time. Use a three-panel config for that.
+
+coverage:
+  - state: Karnataka
+    districts: [Bengaluru Urban, Mysuru, Kalaburagi]
+  - state: Telangana
+    districts: [Hyderabad]
+  - state: Delhi
+    districts: [New Delhi]
+
+sites: []
+
+title: null          # leave empty to build it from the state names
+output_name: multi_state_coverage

@@ -73,6 +73,10 @@ EXTENT_PAD = 0.02
 # The tallest a single-map panel is allowed to be, so a tall state does not
 # produce a page nobody can look at whole.
 COVERAGE_MAX_HEIGHT_IN = 6.4
+
+# Once a widened coverage frame reaches this share of the country's width it
+# is treated as a national view and the whole country is shown.
+COUNTRY_SNAP = 0.8
 COVERAGE_MIN_WIDTH_IN = 8.6
 
 # How tall a single panel is drawn when written out on its own.
@@ -111,6 +115,11 @@ class Panel:
     footnote: str | None = None
     outline_only: bool = False
     unit_label: str = "block"
+    # Larger areas the panel covers, named so a reader can tell them apart.
+    # Used by the multi-state coverage map to label the states themselves.
+    area_labels: gpd.GeoDataFrame | None = None
+    # Overrides the brand's label density for this panel only.
+    label_density: str | None = None
 
     @property
     def aspect(self) -> float:
@@ -252,32 +261,65 @@ def _render_coverage(*, target, config: dict, brand: Brand, output_dir: Path) ->
     plt.rcParams["svg.fonttype"] = "none"
     plt.rcParams["pdf.fonttype"] = 42
 
+    multi_state = getattr(target, "multi_state", False)
+
     districts = target.districts.copy()
-    crs = local_crs(districts)
+    # One state sits inside a single UTM zone, which keeps its shape truest.
+    # Several states can span a third of the country, and one zone stretches
+    # whatever falls near its edges - so a multi-state map moves to the
+    # conformal conic the India panel uses, which holds shape across that
+    # span. Raw latitude and longitude is still never plotted.
+    crs = india_lcc() if multi_state else local_crs(districts)
     districts = districts.to_crs(crs)
     districts["geometry"] = districts.geometry.simplify(
         SIMPLIFY_STATE_M, preserve_topology=True
     )
     districts = _repair(districts)
 
-    mask = districts["name_key"].isin(target.target_district_keys)
+    if multi_state:
+        # Marked by LGD code, not by name. A district name is only unique
+        # within its own state, and two chosen states can share one.
+        mask = districts["lgd"].astype("int64").isin(target.target_district_lgds)
+    else:
+        mask = districts["name_key"].isin(target.target_district_keys)
+
+    margin = brand.layout("margin_in")
+
+    context = None
+    area_labels = None
+    extent = _extent(districts.total_bounds)
+    if multi_state:
+        context, area_labels, country = _coverage_context(target, crs)
+        extent = _widen_extent(
+            extent,
+            min_aspect=(brand.layout("figure_width_in") - 2 * margin)
+            / COVERAGE_MAX_HEIGHT_IN,
+            limit=country,
+        )
+
     panel = Panel(
         kind="coverage",
-        # No caption: the title above already names the state, and a single
+        # No caption: the title above already names the states, and a single
         # map does not need labelling twice.
         caption="",
         frame=districts,
         crs=crs,
         highlight_mask=mask,
         highlight_colours=[brand.highlight],
-        extent=_extent(districts.total_bounds),
-        # No neighbouring states either. On a one-state map they fill the
-        # frame with grey and crowd the thing the map is about.
-        context=None,
+        extent=extent,
+        # On a one-state map neighbouring states fill the frame with grey and
+        # crowd the thing the map is about. Across several states they are the
+        # opposite - without them, two states that do not touch leave white
+        # paper between them where the country should be.
+        context=context,
+        area_labels=area_labels,
+        # Only the districts the programme runs in are named. Three states'
+        # worth of district labels is unreadable at A4, and the question this
+        # map answers is where the work is, not what every district is called.
+        label_density="target_only" if multi_state else None,
         sites=target.sites,
     )
 
-    margin = brand.layout("margin_in")
     # Fit inside both dimensions. Sizing on width alone made a tall state such
     # as Karnataka come out nearly a metre high.
     available_w = brand.layout("figure_width_in") - 2 * margin
@@ -297,7 +339,14 @@ def _render_coverage(*, target, config: dict, brand: Brand, output_dir: Path) ->
     )
     _draw_panel(panel, brand)
 
-    title = config.get("title") or f"{target.state_name} district map"
+    # Sentence case, and it says which states and what kind of map, the way
+    # the three-panel titles do.
+    default_title = (
+        f"Districts across {target.state_name}"
+        if multi_state
+        else f"{target.state_name} district map"
+    )
+    title = config.get("title") or default_title
     _draw_title_block(
         figure,
         title,
@@ -332,12 +381,28 @@ def _render_coverage(*, target, config: dict, brand: Brand, output_dir: Path) ->
     plt.close(figure)
 
     notes.append(f"Source line: {source_line}")
-    notes.append(
-        f"Map type: state coverage, {len(target.target_district_keys)} of "
-        f"{len(districts)} districts marked."
-    )
-    notes.append("Districts marked: " + ", ".join(target.district_names))
-    notes.append(f"Projection: {crs.to_string()}")
+    if multi_state:
+        notes.append(
+            f"Map type: multi-state coverage, {len(target.target_district_lgds)} of "
+            f"{len(districts)} districts marked across {len(target.area_parts)} states."
+        )
+        for part in target.area_parts:
+            notes.append(
+                f"Districts marked in {part.state_name}: "
+                + ", ".join(part.district_names)
+            )
+        notes.append(
+            "Only the marked districts are labelled; three states of district "
+            "labels does not stay legible at A4."
+        )
+    else:
+        notes.append(
+            f"Map type: state coverage, {len(target.target_district_keys)} of "
+            f"{len(districts)} districts marked."
+        )
+        notes.append("Districts marked: " + ", ".join(target.district_names))
+    # india_lcc() hands back a proj string; local_crs() a CRS object.
+    notes.append(f"Projection: {crs if isinstance(crs, str) else crs.to_string()}")
     notes.append(f"Font used: {brand.font_family}.")
     return RenderResult(files=files, figure_size=(width, height), notes=notes)
 
@@ -415,6 +480,67 @@ def _write_panels_separately(
     return written
 
 
+def _coverage_context(target, crs):
+    """The rest of the country behind a multi-state coverage panel.
+
+    Returns the states that are not on the map, to be drawn in the context
+    grey and left unlabelled, and the chosen states, which are named. Both
+    come from the same official state layer the India panel uses, so the
+    external boundary is the official depiction here too.
+    """
+    states = data_module.load_states()
+    states = states[~states["disputed"]].to_crs(crs)
+    states = states.copy()
+    states["geometry"] = states.geometry.simplify(
+        SIMPLIFY_INDIA_M, preserve_topology=True
+    )
+    states = _repair(states)
+
+    chosen = [int(part.state_row["lgd"]) for part in target.area_parts]
+    codes = states["lgd"].astype("int64")
+    return states[~codes.isin(chosen)], states[codes.isin(chosen)], states.total_bounds
+
+
+def _widen_extent(extent, *, min_aspect, limit=None):
+    """Widen a tight extent so the sheet is not a ribbon of white paper.
+
+    States scattered down the country give a tall, narrow bounding box. Framed
+    on that alone the map comes out a strip a third of the page wide, and the
+    land around it is cut to a rectangle that reads as a crop rather than a
+    map. The frame is opened out sideways to the page's own proportions, and
+    never past the country's own bounds, so the space gained is filled with
+    real geography instead of sea.
+    """
+    x0, x1, y0, y1 = extent
+    width, height = x1 - x0, y1 - y0
+    if height <= 0 or width <= 0 or width / height >= min_aspect:
+        return extent
+
+    wanted = height * min_aspect
+    if limit is not None:
+        wanted = min(wanted, max(limit[2] - limit[0], width))
+
+    grow = (wanted - width) / 2
+    x0, x1 = x0 - grow, x1 + grow
+
+    if limit is not None and (x1 - x0) >= COUNTRY_SNAP * (limit[2] - limit[0]):
+        # Opened out this far the frame is a national one, and a frame that
+        # wide but cut off above the northernmost state slices the outline
+        # across the north. At this scale the country is shown whole, with the
+        # external boundary as the official depiction has it.
+        return _extent(limit)
+
+    if limit is not None:
+        # Slide back inside the country rather than hang off one side of it.
+        if x0 < limit[0]:
+            x1 += limit[0] - x0
+            x0 = limit[0]
+        if x1 > limit[2]:
+            x0 -= x1 - limit[2]
+            x1 = limit[2]
+    return (x0, x1, y0, y1)
+
+
 def _draw_coverage_legend(figure, panel: Panel, brand: Brand, *, target) -> None:
     """Marked against not marked, plus any site types used."""
     handles = [
@@ -423,6 +549,13 @@ def _draw_coverage_legend(figure, panel: Panel, brand: Brand, *, target) -> None
         Line2D([], [], marker="s", linestyle="none", color=brand.unit_fill,
                markersize=6, label="Other districts"),
     ]
+    if panel.context is not None and not panel.context.empty:
+        # Across several states the paler grey behind them is the rest of the
+        # country, which is a different thing from a district not covered.
+        handles.append(
+            Line2D([], [], marker="s", linestyle="none", color=brand.context_fill,
+                   markersize=6, label="Other states")
+        )
     seen = set()
     for site in panel.sites:
         site_type = (site.get("type") or "site").lower()
@@ -690,7 +823,18 @@ def _draw_panel(panel: Panel, brand: Brand) -> None:
 
     site_texts, site_points = _draw_sites(panel, brand)
 
-    _label_units(panel, brand, extra_texts=site_texts, objects=obstacles, avoid_points=site_points)
+    # State names go through the same adjustment pass as everything else, so
+    # they are nudged clear of the district labels rather than sitting on top
+    # of them as fixed obstacles would.
+    area_texts = _label_areas(panel, brand)
+
+    _label_units(
+        panel,
+        brand,
+        extra_texts=site_texts + area_texts,
+        objects=obstacles,
+        avoid_points=site_points,
+    )
 
     _caption_panel(ax, panel.caption, brand, footnote=panel.footnote)
     _add_north_arrow(ax, brand)
@@ -837,7 +981,7 @@ def _labels_to_draw(panel: Panel, frame, highlight, brand: Brand):
     a leader line running halfway across the panel. The target is always
     labelled, however small it is.
     """
-    density = brand.label_density
+    density = panel.label_density or brand.label_density
     if density == "all":
         return frame.index, 0
     if density == "target_only":
@@ -888,6 +1032,46 @@ def _label_context(panel: Panel, brand: Brand) -> list:
                 ha="center",
                 va="center",
                 zorder=3,
+            )
+        )
+    return labels
+
+
+def _label_areas(panel: Panel, brand: Brand) -> list:
+    """Name the larger areas a panel covers, clipped to what is in view.
+
+    On a multi-state coverage map only the programme districts are named, so
+    without the state names a reader has no way to tell which state any of
+    them is in. The name sits on the visible part of the state, which matters
+    when a state is only half inside the frame.
+    """
+    if panel.area_labels is None or panel.area_labels.empty:
+        return []
+
+    ax = panel.ax
+    x0, x1 = ax.get_xlim()
+    y0, y1 = ax.get_ylim()
+    view = gpd.GeoSeries.from_wkt(
+        [f"POLYGON(({x0} {y0},{x1} {y0},{x1} {y1},{x0} {y1},{x0} {y0}))"],
+        crs=panel.crs,
+    ).iloc[0]
+
+    labels = []
+    for _, row in panel.area_labels.iterrows():
+        visible = row.geometry.intersection(view)
+        if visible.is_empty or visible.area <= 0:
+            continue
+        point = visible.representative_point()
+        labels.append(
+            ax.text(
+                point.x,
+                point.y,
+                display(row["name"]),
+                fontsize=brand.size("unit_label"),
+                color=brand.text_secondary,
+                ha="center",
+                va="center",
+                zorder=5,
             )
         )
     return labels

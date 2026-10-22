@@ -155,7 +155,7 @@ python -m locator render maps/your-file.yaml
 
 The finished files appear in `output/`, in a folder named after `output_name`.
 
-### Two kinds of map
+### Three kinds of map
 
 **One district** gives the three-panel locator map: India, the state, then the
 district with its blocks and your sites.
@@ -165,12 +165,36 @@ each chosen district marked. That is how you show where a programme runs across
 a state. Blocks and sites still apply to a single district, so the block picker
 steps aside when you choose more than one.
 
-In a config file, use `districts` (plural) for several:
+**Several states** gives one continuous map covering all of them, with the
+districts you pick in each state marked. That is for a programme that crosses
+state lines: one map instead of one per state.
+
+On that map only the districts you marked are labelled. Every district of every
+chosen state is still drawn, in grey, and the rest of the country sits behind
+them — but a full set of district labels across several states is too crowded
+to read on a printed page, so the names are kept for the places the programme
+actually runs. The state names are labelled too, so you can tell which is which.
+
+In a config file, use `districts` (plural) for several districts in one state:
 
 ```yaml
 state: Karnataka
 districts: [Mysore, Mandya, Hassan, Tumkur]
 ```
+
+and `coverage` for several states, one entry each:
+
+```yaml
+coverage:
+  - state: Karnataka
+    districts: [Mysuru, Kalaburagi]
+  - state: Telangana
+    districts: [Hyderabad]
+  - state: Delhi
+    districts: [New Delhi]
+```
+
+There is a ready-made example in `maps/multi_state_coverage.yaml`.
 
 Older district spellings are understood: Mysore, Bangalore Urban, Tumkur,
 Shimoga, Gulbarga and the rest all resolve to the names the government register

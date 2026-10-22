@@ -25,12 +25,20 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import geopandas as gpd
+import pandas as pd
 from shapely.geometry import Point
 
 from . import data as data_module
 from .names import AliasTable, display, key as name_key
 
-__all__ = ["Issue", "ValidationReport", "validate_request", "ResolvedTarget"]
+__all__ = [
+    "Issue",
+    "ValidationReport",
+    "validate_request",
+    "validate_coverage_request",
+    "ResolvedTarget",
+    "AreaPart",
+]
 
 ERROR = "ERROR"
 WARNING = "WARNING"
@@ -93,6 +101,23 @@ class ValidationReport:
 
 
 @dataclass
+class AreaPart:
+    """One state of a multi-state coverage map, and the districts chosen in it.
+
+    Each state is resolved on its own - its own district layer, its own count
+    check - so a name that exists in two states can never be confused for the
+    other one. The districts are carried by LGD code for the same reason.
+    """
+
+    state_name: str
+    state_row: object
+    districts: gpd.GeoDataFrame
+    district_names: list[str]
+    district_keys: list[str]
+    district_lgds: list[int]
+
+
+@dataclass
 class ResolvedTarget:
     """What the validator worked out, handed on to the renderer."""
 
@@ -117,9 +142,22 @@ class ResolvedTarget:
     district_names: list[str] = field(default_factory=list)
     target_district_keys: list[str] = field(default_factory=list)
 
+    # Several states picked at once. The map is then one continuous panel:
+    # every chosen state's districts, the programme districts marked, and the
+    # rest of the country behind them in grey so there is no hole in the land
+    # between two states that do not touch.
+    area_parts: list[AreaPart] = field(default_factory=list)
+    target_district_lgds: list[int] = field(default_factory=list)
+
+    @property
+    def multi_state(self) -> bool:
+        return len(self.area_parts) > 1
+
     @property
     def multi_district(self) -> bool:
-        return len(self.target_district_keys) > 1
+        # A multi-state map is a coverage map whatever the district count, so
+        # anything branching on this treats it as one.
+        return len(self.target_district_keys) > 1 or self.multi_state
 
 
 def _load_reference_counts() -> dict[tuple[str, str], dict]:
@@ -141,6 +179,80 @@ def _load_reference_counts() -> dict[tuple[str, str], dict]:
                 continue
             table[(level, parent)] = row
     return table
+
+
+def _resolve_state(*, state: str, aliases: AliasTable, report: ValidationReport):
+    """Find one state in the boundary layer, through the alias table.
+
+    Returns the matching row, or ``None`` after reporting why it could not be
+    matched. Disputed rows are excluded: the official depiction carries them
+    for the external boundary, not as places a map can be made of.
+    """
+    state_canonical, alias_hit = aliases.resolve("state", state)
+    if alias_hit:
+        report.info("names", alias_hit.message())
+
+    states = data_module.load_states()
+    real_states = states[~states["disputed"]]
+    state_match = real_states[real_states["name_key"] == name_key(state_canonical)]
+    if state_match.empty:
+        near = _closest(name_key(state_canonical), real_states["name_key"].tolist())
+        hint = f" Did you mean {display(near)}?" if near else ""
+        report.error(
+            "state name",
+            f"{state!r} is not a state or union territory in the boundary layer.{hint}",
+        )
+        return None
+    return state_match.iloc[0]
+
+
+def _resolve_districts(
+    *,
+    wanted: list[str],
+    districts: gpd.GeoDataFrame,
+    state_display: str,
+    aliases: AliasTable,
+    report: ValidationReport,
+):
+    """Match each requested district name in one state's district layer.
+
+    Returns the keys, display names and LGD codes of the districts chosen, in
+    the order given, or ``None`` after reporting the first name that could not
+    be matched. The LGD codes are what the renderer marks on, because a
+    district name is only unique within its state.
+    """
+    chosen_keys: list[str] = []
+    chosen_names: list[str] = []
+    chosen_lgds: list[int] = []
+    for given in wanted:
+        canonical, alias_hit = aliases.resolve("district", given)
+        if alias_hit:
+            report.info("names", alias_hit.message())
+        match = districts[districts["name_key"] == name_key(canonical)]
+        if match.empty:
+            near = _closest(name_key(canonical), districts["name_key"].tolist())
+            hint = f" Did you mean {display(near)}?" if near else ""
+            report.error(
+                "district name",
+                f"{given!r} is not a district of {state_display}.{hint} "
+                f"Add a spelling variant to data/aliases.csv if the name is right.",
+            )
+            return None
+        key_value = match.iloc[0]["name_key"]
+        if key_value in chosen_keys:
+            continue
+        chosen_keys.append(key_value)
+        chosen_names.append(display(match.iloc[0]["name"]))
+        chosen_lgds.append(int(match.iloc[0]["lgd"]))
+
+    return chosen_keys, chosen_names, chosen_lgds
+
+
+def _join_names(names: list[str]) -> str:
+    """"A, B and C" - for titles and messages naming several places."""
+    if len(names) <= 1:
+        return names[0] if names else ""
+    return f"{', '.join(names[:-1])} and {names[-1]}"
 
 
 def validate_request(
@@ -171,22 +283,9 @@ def validate_request(
     references = _load_reference_counts()
 
     # ---- Check 1a: the state exists in the boundary layer -------------------
-    state_canonical, alias_hit = aliases.resolve("state", state)
-    if alias_hit:
-        report.info("names", alias_hit.message())
-
-    states = data_module.load_states()
-    real_states = states[~states["disputed"]]
-    state_match = real_states[real_states["name_key"] == name_key(state_canonical)]
-    if state_match.empty:
-        near = _closest(name_key(state_canonical), real_states["name_key"].tolist())
-        hint = f" Did you mean {display(near)}?" if near else ""
-        report.error(
-            "state name",
-            f"{state!r} is not a state or union territory in the boundary layer.{hint}",
-        )
+    state_row = _resolve_state(state=state, aliases=aliases, report=report)
+    if state_row is None:
         return report, None
-    state_row = state_match.iloc[0]
     state_display = display(state_row["name"])
 
     # ---- Check 1b: the district exists in that state ------------------------
@@ -203,27 +302,16 @@ def validate_request(
         )
         return report, None
 
-    chosen_keys: list[str] = []
-    chosen_names: list[str] = []
-    for given in wanted:
-        canonical, alias_hit = aliases.resolve("district", given)
-        if alias_hit:
-            report.info("names", alias_hit.message())
-        match = districts[districts["name_key"] == name_key(canonical)]
-        if match.empty:
-            near = _closest(name_key(canonical), districts["name_key"].tolist())
-            hint = f" Did you mean {display(near)}?" if near else ""
-            report.error(
-                "district name",
-                f"{given!r} is not a district of {state_display}.{hint} "
-                f"Add a spelling variant to data/aliases.csv if the name is right.",
-            )
-            return report, None
-        key_value = match.iloc[0]["name_key"]
-        if key_value in chosen_keys:
-            continue
-        chosen_keys.append(key_value)
-        chosen_names.append(display(match.iloc[0]["name"]))
+    resolved = _resolve_districts(
+        wanted=wanted,
+        districts=districts,
+        state_display=state_display,
+        aliases=aliases,
+        report=report,
+    )
+    if resolved is None:
+        return report, None
+    chosen_keys, chosen_names, _chosen_lgds = resolved
 
     district_row = districts[districts["name_key"] == chosen_keys[0]].iloc[0]
     district_display = display(district_row["name"])
@@ -424,6 +512,180 @@ def validate_request(
 def _sentence(text: str) -> str:
     """Capitalise the first letter only, leaving proper nouns inside intact."""
     return text[:1].upper() + text[1:]
+
+
+def validate_coverage_request(
+    *,
+    areas: list[dict],
+    sites: list[dict] | None = None,
+    aliases: AliasTable,
+    report: ValidationReport | None = None,
+) -> tuple[ValidationReport, ResolvedTarget | None]:
+    """Run the checks for a coverage map spanning several states.
+
+    ``areas`` is one entry per state, each ``{"state": name, "districts": [..]}``.
+    Every state is resolved against its own district layer and counted against
+    its own LGD reference, so nothing is carried from one state to the next and
+    a district name that exists in two states cannot be confused for the other.
+
+    One state is not a special case of this. A single entry is handed to
+    ``validate_request``, which already draws the state coverage map.
+    """
+    sites = sites or []
+    report = report or ValidationReport()
+    references = _load_reference_counts()
+
+    cleaned: list[tuple[str, list[str]]] = []
+    for area in areas or []:
+        area = area or {}
+        name = str(area.get("state") or "").strip()
+        wanted = [
+            str(d).strip() for d in (area.get("districts") or []) if str(d).strip()
+        ]
+        if name:
+            cleaned.append((name, wanted))
+
+    if not cleaned:
+        report.error("states", "No states were chosen.")
+        return report, None
+
+    if len(cleaned) == 1:
+        state_name, wanted = cleaned[0]
+        return validate_request(
+            state=state_name,
+            districts=wanted,
+            sites=sites,
+            aliases=aliases,
+            report=report,
+        )
+
+    parts: list[AreaPart] = []
+    state_names: list[str] = []
+
+    for state_name, wanted in cleaned:
+        # ---- Check 1a, per state --------------------------------------------
+        state_row = _resolve_state(state=state_name, aliases=aliases, report=report)
+        if state_row is None:
+            return report, None
+        state_display = display(state_row["name"])
+
+        if state_display in state_names:
+            report.error("states", f"{state_display} was chosen more than once.")
+            return report, None
+        state_names.append(state_display)
+
+        if not wanted:
+            report.error(
+                "district name",
+                f"No district was chosen in {state_display}. Pick at least one "
+                f"district in every state on the map, or remove {state_display}.",
+            )
+            return report, None
+
+        districts = data_module.districts_of(state_row["lgd"])
+        if districts.empty:
+            report.error(
+                "district layer",
+                f"The district layer has no districts for {state_display}. "
+                f"This state cannot be mapped until district data is added.",
+            )
+            return report, None
+
+        # ---- Check 1b and 2, per state --------------------------------------
+        resolved = _resolve_districts(
+            wanted=wanted,
+            districts=districts,
+            state_display=state_display,
+            aliases=aliases,
+            report=report,
+        )
+        if resolved is None:
+            return report, None
+        keys, names, lgds = resolved
+
+        _check_count(
+            report=report,
+            references=references,
+            aliases=aliases,
+            level="district",
+            parent=state_display,
+            observed_names=sorted(display(n) for n in districts["name"]),
+            what=f"districts in {state_display}",
+        )
+
+        # ---- Check 5, per state ---------------------------------------------
+        _check_geometry(report, districts, f"districts of {state_display}")
+
+        parts.append(
+            AreaPart(
+                state_name=state_display,
+                state_row=state_row,
+                districts=districts,
+                district_names=names,
+                district_keys=keys,
+                district_lgds=lgds,
+            )
+        )
+
+    combined = gpd.GeoDataFrame(
+        pd.concat([part.districts for part in parts], ignore_index=True),
+        crs=parts[0].districts.crs,
+    )
+    target_lgds = [lgd for part in parts for lgd in part.district_lgds]
+    chosen = combined[combined["lgd"].astype("int64").isin(target_lgds)]
+
+    report.info(
+        "states",
+        f"{len(parts)} states chosen, so the map is one panel covering "
+        f"{_join_names(state_names)} with "
+        f"{len(target_lgds)} districts marked: "
+        + "; ".join(
+            f"{part.state_name} - {', '.join(part.district_names)}" for part in parts
+        )
+        + ".",
+    )
+
+    # ---- Check 4: every site inside one of the chosen districts -------------
+    resolved_sites = _check_sites(
+        report=report,
+        sites=sites,
+        district_row=_combined_row(chosen, _join_names(state_names)),
+        district_display=f"the {len(target_lgds)} chosen districts",
+        block_frame=chosen.iloc[0:0],
+        stated_blocks=[],
+        unit_label="district",
+    )
+
+    if report.errors:
+        return report, None
+
+    first = chosen.iloc[0]
+    keys_seen: list[str] = []
+    for part in parts:
+        for key in part.district_keys:
+            if key not in keys_seen:
+                keys_seen.append(key)
+
+    return report, ResolvedTarget(
+        state_name=_join_names(state_names),
+        state_key=name_key(state_names[0]),
+        state_row=parts[0].state_row,
+        district_name=display(first["name"]),
+        district_lgd=first["lgd"],
+        district_row=first,
+        districts=combined,
+        blocks=chosen.iloc[0:0],
+        target_block_names=[],
+        sites=resolved_sites,
+        block_level_label="district",
+        blocks_available=False,
+        unit_level="none",
+        unit_coverage=1.0,
+        district_names=[name for part in parts for name in part.district_names],
+        target_district_keys=keys_seen,
+        area_parts=parts,
+        target_district_lgds=[int(lgd) for lgd in target_lgds],
+    )
 
 
 def _check_count(*, report, references, aliases, level, parent, observed_names, what) -> None:

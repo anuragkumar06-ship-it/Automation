@@ -20,6 +20,13 @@ highlighted and site points marked. Panels joined by connector lines.
 highlighted, for showing where a programme is already active. Added in October
 2026 at HR's request, with a Karnataka reference image showing 13 districts.
 
+**Multi-state coverage map** — one continuous panel covering several states,
+with the districts picked in each one marked. Added 2026-10-22 after feedback
+from Madhura K (Communications): a programme running in three states could only
+be mapped one state at a time. Only the marked districts are labelled, which is
+the deliberate trade-off — a full set of district labels across several states
+does not stay legible at A4.
+
 It replaces a manual process where these maps were made with AI image tools.
 Those maps invented blocks that do not exist, missed real districts, and had an
 unreliable India outline. **Accuracy is the first priority, image quality
@@ -38,7 +45,7 @@ Two front ends, one codebase:
 | Thing | State |
 |---|---|
 | Local app | Works. Current on all features. |
-| Tests | 92 passing. Run with `.venv/Scripts/python.exe -m pytest tests/ -q` |
+| Tests | 114 passing. Run with `.venv/Scripts/python.exe -m pytest tests/ -q` |
 | GitHub | In sync. `anuragkumar06-ship-it/Automation`, branch `main`, HEAD `5ca32e1`, tree clean. |
 | Live site | https://map-cognizant.streamlit.app/ — **needs a manual reboot** (see below) |
 | Data coverage | All 36 states/UTs, 785 districts, 7,146 blocks |
@@ -108,9 +115,10 @@ Automation/
     lgd/             # reference counts for validation
     sea_labels.csv
   style/brand.yaml   # every colour, font, marker and size in one file
-  maps/              # madurai, bhagalpur, balotra, karnataka_coverage
+  maps/              # madurai, bhagalpur, balotra, karnataka_coverage,
+                     #   multi_state_coverage
   assets/            # the CF logo
-  tests/             # 92 tests
+  tests/             # 114 tests
   output/            # gitignored
   .streamlit/config.toml   # CF palette for the dashboard chrome
 ```
@@ -183,6 +191,18 @@ render; `--force` lets warnings through but never missing data.
 `ResolvedTarget.multi_district` drives the coverage-map path, which refuses
 blocks (one district at a time) and checks sites against the union of districts.
 
+`validate_coverage_request` is the multi-state path, taking one `{state,
+districts}` entry per state. Each state is resolved against its own district
+layer and counted against its own LGD reference, so nothing carries from one to
+the next. `locator.cli.validate_config` picks between the two and is what both
+the CLI and the dashboard call, so the check and the render can never disagree.
+
+**A multi-state map marks districts by LGD code, not by name.** A district name
+is only unique inside its own state — Bilaspur is in both Himachal Pradesh and
+Chhattisgarh, Hyderabad is a district of Telangana and not of Karnataka — so a
+name-based mask would mark the wrong district with every check still passing.
+There is a test for this.
+
 **Districts join to states by LGD code, not by name.** The two layers spell
 Dadra & Nagar Haveli and Daman & Diu differently, and joining by name loses it.
 
@@ -204,7 +224,16 @@ Dadra & Nagar Haveli and Daman & Diu differently, and joining by name loses it.
 
 **Projections.** India panel in Lambert Conformal Conic. State and district
 panels in the local UTM zone via `estimate_utm_crs()`. Raw lat/long is never
-plotted.
+plotted. A **multi-state** coverage panel uses the conic, not UTM: three states
+can span a third of the country, and one UTM zone stretches whatever falls near
+its edges.
+
+**Framing a multi-state map.** States scattered down the country give a tall,
+narrow bounding box, which printed as a ribbon down a third of the sheet with
+the land cut to a rectangle around it. `_widen_extent()` opens the frame out
+sideways to the page's proportions, never past the country's own bounds; and
+once it has opened out past `COUNTRY_SNAP` (0.8) of the country's width it
+shows the country whole rather than slicing the outline across the north.
 
 **Titles name the state and the kind of map**, at HR's request:
 `"India: states and union territories"`, `"Tamil Nadu district map"`,
