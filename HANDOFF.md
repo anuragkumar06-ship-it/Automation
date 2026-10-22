@@ -274,6 +274,17 @@ case everywhere, left-aligned titles, no gradients, no shadows, no dashed lines.
 Colours come from the CF brand visual identity guidelines (January 2025) and
 communication guidelines (September 2024).
 
+**The multi-state map uses three strengths of the one teal**, because grey
+states next to grey country read as nothing in particular — HR's words were
+that it "looks awkward". A chosen state is washed in `highlight_pale`
+`#D2E8ED`, its covered districts are `highlight_deep` `#034F62`, and covered
+blocks stay `highlight_secondary` `#06C7CC`. The deep shade exists because the
+standard `#05819B` sat too close in tone to the pale wash and the districts
+disappeared into their own state. Chosen states are also outlined in the rim
+colour, or two that touch merge into one wash. **All of this applies only to
+the multi-state map**; the three-panel and single-state maps keep the standard
+highlight the brief specifies, since they have no pale wash to compete with.
+
 **Logo.** `logo.show: true` in brand.yaml. The communication guidelines require
 CF approval for each use, and the repository is public, so this is worth
 confirming with CF once rather than per map.

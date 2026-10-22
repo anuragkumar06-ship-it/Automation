@@ -126,6 +126,10 @@ class Panel:
     sublayer_mask: object = None
     # Overrides the brand's label density for this panel only.
     label_density: str | None = None
+    # Fill for the units that are not highlighted. The multi-state coverage
+    # map washes them in the pale accent, so a chosen state reads as chosen
+    # rather than as more grey country.
+    other_fill: str | None = None
 
     @property
     def aspect(self) -> float:
@@ -322,7 +326,9 @@ def _render_coverage(*, target, config: dict, brand: Brand, output_dir: Path) ->
         frame=districts,
         crs=crs,
         highlight_mask=mask,
-        highlight_colours=[brand.highlight],
+        # Deeper where the state around them is washed in the pale tint, so a
+        # covered district reads against its own state rather than into it.
+        highlight_colours=[brand.highlight_deep if multi_state else brand.highlight],
         extent=extent,
         # On a one-state map neighbouring states fill the frame with grey and
         # crowd the thing the map is about. Across several states they are the
@@ -332,6 +338,9 @@ def _render_coverage(*, target, config: dict, brand: Brand, output_dir: Path) ->
         area_labels=area_labels,
         sublayer=sublayer,
         sublayer_mask=sublayer_mask,
+        # The chosen states in a pale wash of the accent, so they read as the
+        # states the programme runs in rather than as more grey country.
+        other_fill=brand.highlight_pale if multi_state else None,
         # Only the districts the programme runs in are named. Three states'
         # worth of district labels is unreadable at A4, and the question this
         # map answers is where the work is, not what every district is called.
@@ -838,10 +847,15 @@ def _widen_extent(extent, *, min_aspect, limit=None):
 def _draw_coverage_legend(figure, panel: Panel, brand: Brand, *, target) -> None:
     """Marked against not marked, plus any site types used."""
     handles = [
-        Line2D([], [], marker="s", linestyle="none", color=brand.highlight,
+        Line2D([], [], marker="s", linestyle="none",
+               color=panel.highlight_colours[0] if panel.highlight_colours
+               else brand.highlight,
                markersize=6, label="Districts covered"),
-        Line2D([], [], marker="s", linestyle="none", color=brand.unit_fill,
-               markersize=6, label="Other districts"),
+        Line2D([], [], marker="s", linestyle="none",
+               color=panel.other_fill or brand.unit_fill, markersize=6,
+               label="Other districts in these states"
+               if panel.other_fill
+               else "Other districts"),
     ]
     if panel.sublayer is not None and len(panel.sublayer):
         if panel.sublayer_mask is not None and bool(panel.sublayer_mask.any()):
@@ -1104,7 +1118,7 @@ def _draw_panel(panel: Panel, brand: Brand) -> None:
     if len(others):
         others.plot(
             ax=ax,
-            facecolor=brand.unit_fill,
+            facecolor=panel.other_fill or brand.unit_fill,
             edgecolor=brand.unit_edge,
             linewidth=brand.width("unit_edge"),
             zorder=1,
@@ -1152,6 +1166,18 @@ def _draw_panel(panel: Panel, brand: Brand) -> None:
                     linewidth=brand.width("unit_edge"),
                     zorder=4,
                 )
+
+    # The chosen states outlined over their own districts. Without this, two
+    # chosen states that touch run together into one wash of colour and the
+    # border between them is lost.
+    if panel.area_labels is not None and len(panel.area_labels):
+        panel.area_labels.plot(
+            ax=ax,
+            facecolor="none",
+            edgecolor=brand.highlight_rim,
+            linewidth=brand.width("highlight_edge"),
+            zorder=5,
+        )
 
     # Fix the view before anything is measured against it.
     x0, x1, y0, y1 = panel.extent

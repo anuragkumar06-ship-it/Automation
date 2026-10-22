@@ -27,6 +27,17 @@ colours:
   highlight: "#05819B"       # dark teal, Pantone 2221 C
   highlight_edge: "#03697E"  # a darker rim on the target, so it reads as raised
   highlight_secondary: "#06C7CC"  # medium teal, Pantone 3262 C
+  # A pale wash of the same teal, for a whole state a programme runs in. It
+  # keeps the map to one accent group while letting the chosen states read as
+  # chosen rather than as more grey country. Used only where there are several
+  # states on one map and they have to be told apart from the rest of India.
+  highlight_pale: "#D2E8ED"  # an 18% tint of the dark teal on white
+  # A deeper shade of the same teal for the covered districts where the state
+  # around them is already washed in the pale tint. Against that wash the
+  # standard highlight sat too close in tone and the districts disappeared
+  # into their own state. Used only on the multi-state map; everywhere else
+  # the target keeps the standard highlight above.
+  highlight_deep: "#034F62"  # the dark teal taken down about 40%
 
   water: "#FFFFFF"           # sea and inland water
   background: "#FFFFFF"

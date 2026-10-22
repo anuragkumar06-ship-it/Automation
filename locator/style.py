@@ -65,6 +65,14 @@ class Brand:
         return self.colour("highlight_secondary")
 
     @property
+    def highlight_pale(self) -> str:
+        return self.colour("highlight_pale")
+
+    @property
+    def highlight_deep(self) -> str:
+        return self.colour("highlight_deep")
+
+    @property
     def water(self) -> str:
         return self.colour("water")
 
