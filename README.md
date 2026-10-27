@@ -175,16 +175,32 @@ them — but a full set of district labels across several states is too crowded
 to read on a printed page, so the names are kept for the places the programme
 actually runs. The state names are labelled too, so you can tell which is which.
 
+Each name is placed in clear space beside the place it belongs to, with a thin
+line back to it if it had to move away. A district too small to see on a map
+of the whole country, such as Kolkata, also gets a dot.
+
+### Marking whole states
+
+Leave a state's districts empty and the whole state is marked. You can do this
+for every state on the map, for some of them, or for a single state on its own,
+which gives a map of India with that one state filled in.
+
+A state marked whole is filled in the same dark teal as a covered district, and
+its name is set in bold. Its districts are not named and it gets no block maps,
+since you did not pick any.
+
 ### Blocks on a multi-state map
 
 A block is about 16 km across. On a map covering several states that comes out
-about a millimetre wide — you can see the boundary, but no name would fit. On a
-map of its own district it is about 40 mm, which is plenty.
+about a millimetre wide, too small for a name. On a map of its own district it
+is about 40 mm, which is plenty.
 
-So the tool gives you both. The overview draws the block boundaries inside each
-marked district without naming them, and then writes **a separate map for each
-district you picked**, where its blocks are drawn large and named. Those appear
-in the download list under "Each district's blocks".
+So the tool gives you both. Where the blocks are big enough on the overview to
+read as shapes, it draws their boundaries inside each marked district without
+naming them. On a map spanning the whole country they are left off, because at
+that size they only cover the district's colour. Either way it writes **a
+separate map for each district you picked**, where its blocks are drawn large
+and named. Those appear in the download list under "Each district's blocks".
 
 You can also mark particular blocks. In the dashboard, open "Mark blocks in
 &lt;state&gt;" under that state's districts and pick them district by district.
@@ -221,9 +237,14 @@ coverage:
     districts: [Hyderabad]
   - state: Delhi
     districts: [New Delhi]
+  - state: Kerala
+    districts: []                  # empty marks the whole state
 
 block_detail: true                 # false to skip the per-district maps
 ```
+
+A config with only `state: Kerala` and no districts gives a map of India with
+Kerala marked.
 
 There is a ready-made example in `maps/multi_state_coverage.yaml`.
 

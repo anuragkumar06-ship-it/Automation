@@ -27,13 +27,23 @@ be mapped one state at a time. Only the marked districts are labelled, which is
 the deliberate trade-off — a full set of district labels across several states
 does not stay legible at A4.
 
+**Whole states** — a state with no district picked is marked whole, on the
+multi-state map or alone (one state, no district: India with that state
+filled). Added 2026-10-27 for Deepak's request: the dashboard used to refuse to
+draw until every chosen state had a district. A whole state is the deep teal
+right to its edge, its districts are not named and it gets no block maps.
+`AreaPart.whole` carries it; `ResolvedTarget.multi_state` is true for any map
+with a whole state, because that map is drawn on the national projection.
+
 **Per-district block maps** — written beside a multi-state coverage map, one
 per chosen district. These exist because of a measurement, not a preference: a
 block is 15.9 km across at the median, which is **1.3 mm** on a multi-state
 sheet, **5.9 mm** even on a single-state panel, and **40 mm** on a map of its
 own district. Blocks are only legible at district scale, so that is where their
-names go. The overview draws their boundaries unnamed and the legend says where
-the names are.
+names go. The overview draws their boundaries unnamed when the median block is
+at least `SUBLAYER_MIN_PT` (about 2 mm) on paper, and leaves them off below
+that: at national scale the white lines buried the district's own fill. The
+legend says where the names are either way.
 
 It replaces a manual process where these maps were made with AI image tools.
 Those maps invented blocks that do not exist, missed real districts, and had an
@@ -53,8 +63,8 @@ Two front ends, one codebase:
 | Thing | State |
 |---|---|
 | Local app | Works. Current on all features. |
-| Tests | 123 passing. Run with `.venv/Scripts/python.exe -m pytest tests/ -q` |
-| GitHub | In sync. `anuragkumar06-ship-it/Automation`, branch `main`, HEAD `5ca32e1`, tree clean. |
+| Tests | 134 passing. Run with `.venv/Scripts/python.exe -m pytest tests/ -q` |
+| GitHub | `anuragkumar06-ship-it/Automation`, branch `main`. Check `git status` for anything not yet pushed. |
 | Live site | https://map-cognizant.streamlit.app/ — **needs a manual reboot** (see below) |
 | Data coverage | All 36 states/UTs, 785 districts, 7,146 blocks |
 
@@ -285,6 +295,22 @@ colour, or two that touch merge into one wash. **All of this applies only to
 the multi-state map**; the three-panel and single-state maps keep the standard
 highlight the brief specifies, since they have no pale wash to compete with.
 
+The outline traces each state's outer edge only (`_rim_outlines`): holes such
+as the Puducherry enclaves, and parts under `RIM_MIN_PT`, are left out, or the
+heavier rim prints them as dark specks. Whole states are outlined in white,
+since the teal rim vanishes on the deep fill. `_polygons()` flattens nested
+geometry; Tamil Nadu's repaired outline is a collection holding a
+multipolygon, and looking one level down drew no outline at all.
+
+**Labels on the multi-state map** are placed by `_label_callout_map`, not
+adjustText. Each label is tried on rings round what it names, nearest first,
+and may not touch a chosen state's outline, a covered area, a dot, a site, the
+scale bar, the north arrow or another label; crossing other borders or the
+coast costs extra. State names go inside the state when they fit. It is
+deterministic by construction. Started on the shape, as adjustText does, the
+labels sat across coastlines and state outlines. Covered districts under
+`SMALL_MARK_PT` also get a dot, so one like Kolkata cannot vanish.
+
 **Logo.** `logo.show: true` in brand.yaml. The communication guidelines require
 CF approval for each use, and the repository is public, so this is worth
 confirming with CF once rather than per map.
@@ -350,6 +376,9 @@ Places (New), stopping at the first usable answer.
 | Coverage map 10 in tall | fitted one dimension only | fit both, then trim the page |
 | Live KeyError | new `app.py` against cached old `cli.py` | defensive reads + reboot |
 | Maps vanished after one download | results drawn inside `if go:`; a download rerun makes the button False | result kept in `session_state` |
+| Covered districts a white scribble at national scale | block boundaries drawn at any size | `SUBLAYER_MIN_PT` |
+| Dark specks over Tamil Nadu and the WB coast | state rim drawn round enclaves and islands | `_rim_outlines` |
+| Labels across coastlines and state outlines | adjustText starts each label on its shape | `_label_callout_map` |
 
 ### The GRH lesson
 
