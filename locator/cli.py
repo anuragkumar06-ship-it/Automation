@@ -87,7 +87,11 @@ def validate_config(config: dict, *, aliases, report=None):
     """
     areas = coverage_areas(config)
 
-    if areas and len(areas) > 1:
+    if not areas and not config.get("district") and not config.get("districts"):
+        # A state on its own, with no district: the state is marked whole.
+        areas = [{"state": str(config.get("state") or ""), "districts": []}]
+
+    if areas and (len(areas) > 1 or not areas[0]["districts"]):
         return validate_coverage_request(
             areas=areas,
             sites=list(config.get("sites") or []),
@@ -139,16 +143,8 @@ def load_config(path: str | Path) -> dict:
             f"{path} is missing the 'state' setting. For a map covering several "
             f"states, use 'coverage' with one entry per state instead."
         )
-    if (
-        config.get("state")
-        and not config.get("district")
-        and not config.get("districts")
-    ):
-        raise SystemExit(
-            f"{path} needs either 'district' for one district, or 'districts' "
-            f"for several."
-        )
-
+    # A state with no 'district' or 'districts' is marked whole, which is a
+    # map in its own right rather than a missing setting.
     config.setdefault("blocks", [])
     config.setdefault("sites", [])
     config.setdefault("output_name", path.stem)
@@ -229,8 +225,10 @@ def _render_log(*, config, report, target, result) -> str:
         "Inputs",
         "-" * 60,
         f"State:    {_states_asked(config)}  ->  {target.state_name}",
-        f"District: {', '.join(target.district_names)}"
+        f"District: {', '.join(target.district_names) or '(none)'}"
         + (f" (LGD {target.district_lgd})" if not target.multi_district else ""),
+        f"Marked whole: "
+        f"{', '.join(p.state_name for p in target.whole_states) or '(none)'}",
         f"Blocks:   {', '.join(config.get('blocks') or []) or '(none)'}",
     ]
     for site in target.sites:

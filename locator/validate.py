@@ -115,6 +115,10 @@ class AreaPart:
     district_names: list[str]
     district_keys: list[str]
     district_lgds: list[int]
+    # No district picked: the whole state is what the programme covers, and it
+    # is marked as one. Its districts are still drawn, so the map does not
+    # pretend the state has no subdivisions, but none of them is named.
+    whole: bool = False
 
 
 @dataclass
@@ -180,8 +184,15 @@ class ResolvedTarget:
     district_details: list[DistrictDetail] = field(default_factory=list)
 
     @property
+    def whole_states(self) -> list[AreaPart]:
+        return [part for part in self.area_parts if part.whole]
+
+    @property
     def multi_state(self) -> bool:
-        return len(self.area_parts) > 1
+        # The map drawn across states on the national projection. A single
+        # state marked whole goes this way too: with no district to frame on,
+        # the question it answers is where in India the state is.
+        return len(self.area_parts) > 1 or bool(self.whole_states)
 
     @property
     def multi_district(self) -> bool:
@@ -665,8 +676,12 @@ def validate_coverage_request(
     its own LGD reference, so nothing is carried from one state to the next and
     a district name that exists in two states cannot be confused for the other.
 
-    One state is not a special case of this. A single entry is handed to
-    ``validate_request``, which already draws the state coverage map.
+    A state with no districts listed is marked whole. That is a choice, not a
+    gap: a programme can run across a state rather than in named districts.
+
+    One state with districts is not a special case of this. It is handed to
+    ``validate_request``, which already draws the state coverage map. One state
+    marked whole stays here, since it is a state on the map of India.
     """
     sites = sites or []
     report = report or ValidationReport()
@@ -688,7 +703,7 @@ def validate_coverage_request(
         report.error("states", "No states were chosen.")
         return report, None
 
-    if len(cleaned) == 1:
+    if len(cleaned) == 1 and cleaned[0][1]:
         state_name, wanted, marks = cleaned[0]
         return validate_request(
             state=state_name,
@@ -715,14 +730,6 @@ def validate_coverage_request(
             return report, None
         state_names.append(state_display)
 
-        if not wanted:
-            report.error(
-                "district name",
-                f"No district was chosen in {state_display}. Pick at least one "
-                f"district in every state on the map, or remove {state_display}.",
-            )
-            return report, None
-
         districts = data_module.districts_of(state_row["lgd"])
         if districts.empty:
             report.error(
@@ -733,16 +740,22 @@ def validate_coverage_request(
             return report, None
 
         # ---- Check 1b and 2, per state --------------------------------------
-        resolved = _resolve_districts(
-            wanted=wanted,
-            districts=districts,
-            state_display=state_display,
-            aliases=aliases,
-            report=report,
-        )
-        if resolved is None:
-            return report, None
-        keys, names, lgds = resolved
+        whole = not wanted
+        if whole:
+            # Nothing to resolve: the whole state is the mark. Its districts
+            # are still counted and checked below, because they are drawn.
+            keys, names, lgds = [], [], []
+        else:
+            resolved = _resolve_districts(
+                wanted=wanted,
+                districts=districts,
+                state_display=state_display,
+                aliases=aliases,
+                report=report,
+            )
+            if resolved is None:
+                return report, None
+            keys, names, lgds = resolved
 
         _check_count(
             report=report,
@@ -786,6 +799,7 @@ def validate_coverage_request(
                 district_names=names,
                 district_keys=keys,
                 district_lgds=lgds,
+                whole=whole,
             )
         )
 
@@ -795,27 +809,38 @@ def validate_coverage_request(
     )
     target_lgds = [lgd for part in parts for lgd in part.district_lgds]
     chosen = combined[combined["lgd"].astype("int64").isin(target_lgds)]
-
-    report.info(
-        "states",
-        f"{len(parts)} states chosen, so the map is one panel covering "
-        f"{_join_names(state_names)} with "
-        f"{len(target_lgds)} districts marked: "
-        + "; ".join(
-            f"{part.state_name} - {', '.join(part.district_names)}" for part in parts
-        )
-        + ".",
+    # What a site has to fall inside: the chosen districts, and every district
+    # of a state marked whole.
+    whole_parts = [part for part in parts if part.whole]
+    covered = pd.concat(
+        [chosen] + [part.districts for part in whole_parts], ignore_index=True
     )
 
-    # ---- Check 4: every site inside one of the chosen districts -------------
+    marked = "; ".join(
+        f"{part.state_name} - "
+        + ("whole state" if part.whole else ", ".join(part.district_names))
+        for part in parts
+    )
+    if len(parts) > 1:
+        lead = f"{len(parts)} states chosen, so the map is one panel covering {_join_names(state_names)}"
+    else:
+        lead = f"{state_names[0]} chosen with no district, so the map is India with the state marked"
+    report.info("states", f"{lead}: {marked}.")
+
+    # ---- Check 4: every site inside the area marked -------------------------
+    area_display = _covered_display(len(target_lgds), [p.state_name for p in whole_parts])
     resolved_sites = _check_sites(
         report=report,
         sites=sites,
-        district_row=_combined_row(chosen, _join_names(state_names)),
-        district_display=f"the {len(target_lgds)} chosen districts",
+        district_row={
+            "geometry": covered.geometry.union_all(),
+            "name": area_display,
+        },
+        district_display=area_display,
         block_frame=chosen.iloc[0:0],
         stated_blocks=[],
         unit_label="district",
+        area_noun="",
     )
 
     # ---- Check 4, continued: which block each site really falls in ----------
@@ -844,7 +869,7 @@ def validate_coverage_request(
     if report.errors:
         return report, None
 
-    first = chosen.iloc[0]
+    first = covered.iloc[0]
     keys_seen: list[str] = []
     for part in parts:
         for key in part.district_keys:
@@ -943,10 +968,35 @@ def _combined_row(chosen, state_display):
     }
 
 
+def _covered_display(district_count: int, whole_states: list[str]) -> str:
+    """How a site check names the area marked on a map across states."""
+    parts = []
+    if district_count == 1:
+        parts.append("the chosen district")
+    elif district_count:
+        parts.append(f"the {district_count} chosen districts")
+    if whole_states:
+        parts.append(_join_names(whole_states))
+    return " or ".join(parts)
+
+
 def _check_sites(
-    *, report, sites, district_row, district_display, block_frame, stated_blocks, unit_label="block"
+    *,
+    report,
+    sites,
+    district_row,
+    district_display,
+    block_frame,
+    stated_blocks,
+    unit_label="block",
+    area_noun=" district",
 ):
-    """Confirm each site falls inside the district and report its actual block."""
+    """Confirm each site falls inside the district and report its actual block.
+
+    ``area_noun`` follows ``district_display`` in the messages. It is empty
+    where the display already says what kind of area it is, such as "the 3
+    chosen districts or Kerala".
+    """
     if not sites:
         report.info("sites", "No site points given.")
         return []
@@ -985,7 +1035,7 @@ def _check_sites(
             distance_km = district_m.distance(point_m) / 1000
             report.error(
                 "site location",
-                f"{name} at ({lat}, {lon}) is not inside {district_display} district - "
+                f"{name} at ({lat}, {lon}) is not inside {district_display}{area_noun} - "
                 f"it is {distance_km:.1f} km outside it. Check the coordinates: "
                 f"right-click the place in Google Maps and copy the pair it shows.",
             )
@@ -996,16 +1046,20 @@ def _check_sites(
             hit = blocks_m[blocks_m.geometry.contains(point_m)]
             actual_block = display(hit.iloc[0]["name"]) if len(hit) else None
 
-        if not have_blocks:
+        if not have_blocks and not area_noun:
+            # Across states the overview only answers "is it in the area";
+            # the block, where there is one, is reported per district later.
+            report.info("site location", f"{name} is inside {district_display}.")
+        elif not have_blocks:
             report.info(
                 "site location",
-                f"{name} is inside {district_display} district. There is no "
+                f"{name} is inside {district_display}{area_noun}. There is no "
                 f"{unit_label} layer for this district, so no {unit_label} can be named.",
             )
         elif actual_block is None:
             report.warning(
                 "site location",
-                f"{name} is inside {district_display} district but not inside any "
+                f"{name} is inside {district_display}{area_noun} but not inside any "
                 f"{unit_label} polygon. It may sit in a municipal area the "
                 f"{unit_label} layer excludes.",
             )

@@ -111,8 +111,30 @@ class TestNamesDoNotLeakBetweenStates:
         assert len(set(target.target_district_lgds)) == 2
 
 
-class TestRefusals:
-    def test_a_state_with_no_district_chosen_is_an_error(self, aliases):
+class TestWholeStates:
+    """A state with no district chosen is marked whole, not refused."""
+
+    STATES_ONLY = [
+        {"state": "West Bengal", "districts": []},
+        {"state": "Kerala", "districts": []},
+        {"state": "Tamil Nadu", "districts": []},
+    ]
+
+    def test_states_alone_pass(self, aliases):
+        report, target = run(aliases, self.STATES_ONLY)
+        assert report.errors == []
+        assert report.warnings == []
+        assert target.multi_state
+        assert [p.whole for p in target.area_parts] == [True, True, True]
+
+    def test_no_district_is_named_when_only_states_are_marked(self, aliases):
+        _, target = run(aliases, self.STATES_ONLY)
+        assert target.target_district_lgds == []
+        assert target.district_names == []
+        # No district was chosen, so there is no block map to write.
+        assert target.district_details == []
+
+    def test_whole_states_mix_with_chosen_districts(self, aliases):
         report, target = run(
             aliases,
             [
@@ -120,9 +142,63 @@ class TestRefusals:
                 {"state": "Telangana", "districts": []},
             ],
         )
-        assert report.errors
-        assert target is None
+        assert report.errors == []
+        assert [p.whole for p in target.area_parts] == [False, True]
+        assert [p.state_name for p in target.whole_states] == ["Telangana"]
+        assert len(target.target_district_lgds) == 1
+        assert [d.district_name for d in target.district_details] == ["Mysuru"]
 
+    def test_one_state_alone_is_marked_on_india(self, aliases):
+        report, target = run(aliases, [{"state": "Kerala", "districts": []}])
+        assert report.errors == []
+        assert target.multi_state  # the map of India, not a state panel
+        assert target.whole_states[0].state_name == "Kerala"
+
+    def test_a_config_naming_only_a_state_marks_it_whole(self, aliases):
+        report, target = validate_config({"state": "Kerala", "sites": []}, aliases=aliases)
+        assert report.errors == []
+        assert [p.state_name for p in target.whole_states] == ["Kerala"]
+
+    def test_a_site_in_a_whole_state_is_accepted(self, aliases):
+        report, target = run(
+            aliases,
+            [
+                {"state": "Karnataka", "districts": ["Mysuru"]},
+                {"state": "Kerala", "districts": []},
+            ],
+            sites=[{"name": "Kochi", "lat": 9.9312, "lon": 76.2673}],
+        )
+        assert report.errors == []
+        assert len(target.sites) == 1
+
+    def test_a_site_outside_every_marked_area_is_refused(self, aliases):
+        # Chennai is in Tamil Nadu, which is not on this map at all.
+        report, target = run(
+            aliases,
+            [
+                {"state": "Karnataka", "districts": ["Mysuru"]},
+                {"state": "Kerala", "districts": []},
+            ],
+            sites=[{"name": "Chennai", "lat": 13.0827, "lon": 80.2707}],
+        )
+        assert target is None
+        assert any("the chosen district or Kerala" in i.message for i in report.errors)
+
+    def test_a_states_only_map_renders(self, aliases, tmp_path):
+        from locator.cli import run_from_config
+
+        outcome = run_from_config(
+            {"state": "Goa", "sites": [], "output_name": "goa"},
+            output_root=tmp_path,
+            log=lambda *a: None,
+        )
+        assert outcome["rendered"]
+        assert (tmp_path / "goa" / "goa.svg").exists()
+        log = (tmp_path / "goa" / "render_log.txt").read_text(encoding="utf-8")
+        assert "Goa: marked whole" in log
+
+
+class TestRefusals:
     def test_the_same_state_twice_is_an_error(self, aliases):
         report, target = run(
             aliases,

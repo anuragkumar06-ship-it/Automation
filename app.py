@@ -112,11 +112,33 @@ def _district_shape(state_lgd: int, district_lgd: int):
     return geometry, tuple(float(v) for v in geometry.bounds)
 
 
-def _target_label(chosen: list[str], first: str) -> str:
+@st.cache_resource(show_spinner=False)
+def _state_shape(state_lgd: int):
+    """A whole state as one polygon and its bounding box."""
+    districts = data_module.districts_of(state_lgd)
+    if districts.empty:
+        return None, None
+    geometry = districts.geometry.union_all()
+    return geometry, tuple(float(v) for v in geometry.bounds)
+
+
+def _join(names: list[str]) -> str:
+    """'A', 'A and B', 'A, B and C'."""
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def _areas_label(areas: list[dict]) -> str:
     """How to name the area a site has to fall inside."""
-    if len(chosen) > 1:
-        return f"the {len(chosen)} chosen districts"
-    return f"{first} district"
+    districts = [d for area in areas for d in area["districts"]]
+    whole = [area["state"] for area in areas if not area["districts"]]
+    parts = []
+    if len(districts) == 1:
+        parts.append(f"{districts[0]} district")
+    elif districts:
+        parts.append(f"the {len(districts)} chosen districts")
+    if whole:
+        parts.append(_join(whole))
+    return " or ".join(parts)
 
 
 def _target_shape(state_lgd: int, chosen: list[str], pairs):
@@ -146,7 +168,11 @@ def _areas_shape(areas: list[dict]):
     shapes = []
     boxes = []
     for area in areas:
-        shape, box = _target_shape(area["lgd"], area["districts"], area["pairs"])
+        if area["districts"]:
+            shape, box = _target_shape(area["lgd"], area["districts"], area["pairs"])
+        else:
+            # No district picked: the whole state is marked.
+            shape, box = _state_shape(area["lgd"])
         if shape is not None:
             shapes.append(shape)
             boxes.append(box)
@@ -217,7 +243,8 @@ with st.sidebar:
         help=(
             "One state gives the locator map, or a coverage map of that state. "
             "Several give one continuous map covering all of them, with the "
-            "districts you pick in each one marked."
+            "districts you pick in each one marked. Pick no districts in a state "
+            "to mark the whole state."
         ),
     )
     if not chosen_states:
@@ -243,6 +270,7 @@ with st.sidebar:
                 names,
                 default=[],
                 key=f"districts_{lgd}",
+                placeholder="None: mark the whole state",
             )
         else:
             default_district = "Madurai" if "Madurai" in names else names[0]
@@ -250,9 +278,11 @@ with st.sidebar:
                 f"Districts ({len(names)} in this state)",
                 names,
                 default=[default_district],
+                placeholder="None: mark the whole state",
                 help=(
                     "One district gives the three-panel locator map. Several "
-                    "give a coverage map: the state with each of them marked."
+                    "give a coverage map: the state with each of them marked. "
+                    "None gives a map of India with the whole state marked."
                 ),
             )
         # Blocks to mark, district by district. Tucked into an expander so ten
@@ -293,14 +323,10 @@ with st.sidebar:
             }
         )
 
-    missing = [area["state"] for area in areas if not area["districts"]]
-    if missing:
-        st.warning(
-            "Choose at least one district in " + ", ".join(missing) + "."
-            if multi_state
-            else "Choose at least one district."
-        )
-        st.stop()
+    # A state with no district picked is marked whole. That used to stop the
+    # page with "choose at least one district", but a programme can run across
+    # a whole state, and marking it is a map in its own right.
+    whole_states = [area["state"] for area in areas if not area["districts"]]
 
     # The rest of the page works from the first state. On a single-state map
     # that is the only state, and nothing below this line changes.
@@ -309,30 +335,51 @@ with st.sidebar:
     state_lgd = primary["lgd"]
     district_pairs = primary["pairs"]
     chosen_districts = primary["districts"]
-    district_name = chosen_districts[0]
-    district_lgd = dict(district_pairs)[district_name]
+    district_name = chosen_districts[0] if chosen_districts else None
+    district_lgd = dict(district_pairs)[district_name] if district_name else None
     total_districts = sum(len(area["districts"]) for area in areas)
     many_districts = multi_state or len(chosen_districts) > 1
+    # Anything but one district in one state: no block picker, no three panels.
+    no_single_district = many_districts or not chosen_districts
 
     block_detail = True
     if multi_state:
-        block_detail = st.checkbox(
-            "Also map each district's blocks",
-            value=True,
-            help=(
-                "A block is about 16 km across, which is a millimetre on a map "
-                "covering several states. Each district therefore gets a map of "
-                "its own, where its blocks are big enough to be named."
-            ),
-        )
+        if total_districts:
+            block_detail = st.checkbox(
+                "Also map each district's blocks",
+                value=True,
+                help=(
+                    "A block is about 16 km across, which is a millimetre on a map "
+                    "covering several states. Each district therefore gets a map of "
+                    "its own, where its blocks are big enough to be named."
+                ),
+            )
+        marked = []
+        if total_districts:
+            marked.append(
+                f"{total_districts} district{'s' if total_districts > 1 else ''} marked"
+            )
+        if whole_states:
+            marked.append(f"{_join(whole_states)} marked whole")
         st.markdown(
             f'<div class="cf-caption">{len(chosen_states)} states chosen, so this '
-            f"will be one map covering all of them with {total_districts} districts "
-            "marked. Only the marked districts are named on it — a full set of "
-            "district labels across several states does not stay legible at A4. "
-            "Each district also gets a map of its own, where its blocks have the "
-            "room to be named. The three-panel layout applies to a single "
-            "district.</div>",
+            f"will be one map covering all of them, with {' and '.join(marked)}. "
+            "Only what is marked is named on it — a full set of district labels "
+            "across several states does not stay legible at A4."
+            + (
+                " Each district also gets a map of its own, where its blocks have "
+                "the room to be named."
+                if total_districts
+                else ""
+            )
+            + "</div>",
+            unsafe_allow_html=True,
+        )
+    elif not chosen_districts:
+        st.markdown(
+            f'<div class="cf-caption">No district chosen, so this will be a map of '
+            f"India with the whole of {state_name} marked. Pick a district for the "
+            "three-panel locator map.</div>",
             unsafe_allow_html=True,
         )
     elif many_districts:
@@ -344,10 +391,10 @@ with st.sidebar:
         )
 
     block_names, unit_label = (
-        ([], "block") if many_districts
+        ([], "block") if no_single_district
         else _unit_options(district_lgd, district_lgd_geom_key=district_name)
     )
-    if many_districts:
+    if no_single_district:
         blocks = []
     elif block_names:
         default_blocks = [b for b in ("Madurai West",) if b in block_names]
@@ -413,12 +460,13 @@ with st.sidebar:
         found_type = st.selectbox("Mark it as", SITE_TYPES, key="geo_type")
 
         wider = st.checkbox(
-            "Search beyond this district",
+            "Search beyond the area being mapped",
             value=False,
             key="geo_wider",
             help=(
-                "Off, only places inside the district are offered, which is what "
-                "stops a search for a place in Jammu returning one in Srinagar. "
+                "Off, only places inside the chosen districts or states are "
+                "offered, which is what stops a search for a place in Jammu "
+                "returning one in Srinagar. "
                 "Turn it on if the site genuinely sits just outside."
             ),
         )
@@ -435,10 +483,16 @@ with st.sidebar:
                     return shape is None or shape.contains(Point(lon, lat))
 
                 try:
-                    with st.spinner(f"Looking for “{query}” in {district_name}..."):
+                    with st.spinner(f"Looking for “{query}” in {_areas_label(areas)}..."):
                         if wider:
                             found = geocode.search(
-                                query, near=f"{district_name}, {state_name}", limit=8
+                                query,
+                                near=(
+                                    f"{district_name}, {state_name}"
+                                    if district_name
+                                    else state_name
+                                ),
+                                limit=8,
                             )
                             source, tried = "", []
                         else:
@@ -490,11 +544,11 @@ with st.sidebar:
             else:
                 tried = st.session_state.get("geo_tried") or ["OpenStreetMap"]
                 st.info(
-                    f"No match inside {district_name} district. Tried "
+                    f"No match inside {_areas_label(areas)}. Tried "
                     f"{', '.join(tried)}. That usually means neither holds that name "
                     f"here, not that the place does not exist. Try a nearby landmark, "
-                    f"tick “Search beyond this district”, or right-click the place in "
-                    f"Google Maps and type the coordinates in below."
+                    f"tick “Search beyond the area being mapped”, or right-click the "
+                    f"place in Google Maps and type the coordinates in below."
                 )
 
     sites_table = st.data_editor(
@@ -518,7 +572,7 @@ with st.sidebar:
     # had just added.
     _checked, _problems = sites_module.sites_from_table(sites_table)
     if _checked:
-        shape, _ = _target_shape(state_lgd, chosen_districts, district_pairs)
+        shape, _ = _areas_shape(areas)
         if shape is not None:
             from shapely.geometry import Point
 
@@ -530,12 +584,12 @@ with st.sidebar:
                 names = ", ".join(s["name"] for s in strays)
                 st.warning(
                     f"{len(strays)} site(s) are not inside "
-                    f"{_target_label(chosen_districts, district_name)}: "
+                    f"{_areas_label(areas)}: "
                     f"{names}. They are probably left over from another district."
                 )
                 if st.button(
                     f"Remove the {len(strays)} site(s) outside "
-                    f"{_target_label(chosen_districts, district_name)}",
+                    f"{_areas_label(areas)}",
                     use_container_width=True,
                     key="drop_strays",
                 ):
@@ -548,7 +602,7 @@ with st.sidebar:
             else:
                 st.caption(
                     f"All {len(_checked)} site(s) fall inside "
-                    f"{_target_label(chosen_districts, district_name)}."
+                    f"{_areas_label(areas)}."
                 )
     for _problem in _problems:
         st.warning(_problem)
@@ -577,6 +631,8 @@ with st.sidebar:
             placeholder=(
                 f"{state_name}: districts covered"
                 if many_districts
+                else f"{state_name} on the map of India"
+                if not district_name
                 else f"{district_name} district, {state_name}"
             ),
         )
@@ -585,6 +641,8 @@ with st.sidebar:
             value=(
                 f"{state_name.lower().replace(' ', '_')}_coverage"
                 if many_districts
+                else f"{state_name.lower().replace(' ', '_')}_state"
+                if not district_name
                 else f"{district_name.lower().replace(' ', '_')}_locator"
             ),
         )
@@ -689,7 +747,8 @@ if go:
         "state": config.get("state"),
         "district": district_name,
         "made_for": "; ".join(
-            f"{area['state']}: {', '.join(area['districts'])}" for area in areas
+            f"{area['state']}: {', '.join(area['districts']) or 'whole state'}"
+            for area in areas
         ),
         "districts": [d for area in areas for d in area["districts"]],
     }
@@ -845,7 +904,8 @@ elif result:
 else:
     st.markdown(
         '<div class="cf-note">Pick a state, district and block on the left, add your '
-        "sites, then press <b>Make the map</b>.</div>",
+        "sites, then press <b>Make the map</b>. To mark whole states, pick them "
+        "and leave their districts empty.</div>",
         unsafe_allow_html=True,
     )
     st.markdown(theme.rule_html(), unsafe_allow_html=True)
