@@ -83,6 +83,28 @@ COVERAGE_MIN_WIDTH_IN = 8.6
 # How tall a single panel is drawn when written out on its own.
 PANEL_ALONE_HEIGHT_IN = 5.6
 
+# On the map across states, sizes on paper in points (1 mm is 2.83 pt).
+#
+# Block boundaries inside a covered district are drawn only when the median
+# block is at least this wide. Across India a block is under a millimetre, and
+# the white lines bury the district's own colour until it reads as a scribble.
+SUBLAYER_MIN_PT = 6.0
+# A covered district drawn smaller than this also gets a dot, so it cannot
+# vanish at national scale. Kolkata is about half a millimetre across.
+SMALL_MARK_PT = 6.0
+# Parts of a chosen state smaller than this are left out of its outline. The
+# outline is drawn heavier than a border, and round an island or an enclave
+# it prints as a dark speck rather than a shape.
+RIM_MIN_PT = 3.0
+# Space kept between a placed label and anything it must not touch.
+CALLOUT_CLEAR_PT = 1.5
+# How far out a label is tried from what it names, nearest first.
+CALLOUT_GAPS_PT = (2.5, 5, 9, 14, 21, 30, 42, 58, 80)
+# Positions tried round each ring.
+CALLOUT_STEPS = 32
+# A label is moved this far before a line is drawn back to what it names.
+CALLOUT_LEADER_PT = 6.0
+
 # Fixed bands, in inches, for the title block above the panels and for the
 # legend plus source line below them. Keeping these in inches rather than as a
 # fraction means type stays the same size whatever height the panels come out.
@@ -130,6 +152,17 @@ class Panel:
     # map washes them in the pale accent, so a chosen state reads as chosen
     # rather than as more grey country.
     other_fill: str | None = None
+    # Labels placed one at a time into clear space, each with a leader line
+    # back to what it names. Used on the map across states, where a district
+    # is a few millimetres wide and a label started on top of it ends up
+    # across a coastline or a state border.
+    callouts: bool = False
+    # The districts named on a callout map, by LGD code. A state marked whole
+    # fills its districts too, but they are not named; the state is.
+    covered_lgds: list[int] = field(default_factory=list)
+    whole_state_lgds: list[int] = field(default_factory=list)
+    # Covered districts too small to see at this scale, given a dot as well.
+    dotted: int = 0
 
     @property
     def aspect(self) -> float:
@@ -294,10 +327,17 @@ def _render_coverage(*, target, config: dict, brand: Brand, output_dir: Path) ->
     )
     districts = _repair(districts)
 
+    whole_parts = list(getattr(target, "whole_states", []))
+    whole_lgds = [int(part.state_row["lgd"]) for part in whole_parts]
+    only_whole = bool(whole_parts) and len(whole_parts) == len(target.area_parts)
+
     if multi_state:
         # Marked by LGD code, not by name. A district name is only unique
         # within its own state, and two chosen states can share one.
         mask = districts["lgd"].astype("int64").isin(target.target_district_lgds)
+        if whole_lgds:
+            # A state marked whole is every one of its districts.
+            mask = mask | districts["state_lgd"].astype("int64").isin(whole_lgds)
     else:
         mask = districts["name_key"].isin(target.target_district_keys)
 
@@ -311,12 +351,17 @@ def _render_coverage(*, target, config: dict, brand: Brand, output_dir: Path) ->
     if multi_state:
         sublayer, sublayer_mask = _coverage_sublayer(target, crs)
         context, area_labels, country = _coverage_context(target, crs)
-        extent = _widen_extent(
-            extent,
-            min_aspect=(brand.layout("figure_width_in") - 2 * margin)
-            / COVERAGE_MAX_HEIGHT_IN,
-            limit=country,
-        )
+        if only_whole:
+            # Nothing finer than a state is marked, so the question the map
+            # answers is where in India these states are: the whole country.
+            extent = _extent(country)
+        else:
+            extent = _widen_extent(
+                extent,
+                min_aspect=(brand.layout("figure_width_in") - 2 * margin)
+                / COVERAGE_MAX_HEIGHT_IN,
+                limit=country,
+            )
 
     panel = Panel(
         kind="coverage",
@@ -346,6 +391,9 @@ def _render_coverage(*, target, config: dict, brand: Brand, output_dir: Path) ->
         # map answers is where the work is, not what every district is called.
         label_density="target_only" if multi_state else None,
         sites=target.sites,
+        callouts=multi_state,
+        covered_lgds=[int(v) for v in target.target_district_lgds] if multi_state else [],
+        whole_state_lgds=whole_lgds,
     )
 
     # Fit inside both dimensions. Sizing on width alone made a tall state such
@@ -353,6 +401,23 @@ def _render_coverage(*, target, config: dict, brand: Brand, output_dir: Path) ->
     available_w = brand.layout("figure_width_in") - 2 * margin
     panel_h = min(COVERAGE_MAX_HEIGHT_IN, available_w / panel.aspect)
     panel_w = panel_h * panel.aspect
+
+    # Block boundaries only where a block is big enough on paper to read as a
+    # shape. Below that they are a white scribble over the district's colour,
+    # and the district's own map is where the blocks are shown anyway.
+    blocks_hidden = False
+    if panel.sublayer is not None and len(panel.sublayer):
+        per_unit = panel_w * 72 / (panel.extent[1] - panel.extent[0])
+        median_pt = float(panel.sublayer.geometry.area.pow(0.5).median()) * per_unit
+        if median_pt < SUBLAYER_MIN_PT:
+            blocks_hidden = True
+            panel.sublayer = None
+            panel.sublayer_mask = None
+            notes.append(
+                f"Block boundaries left off the overview: the median block is "
+                f"{median_pt / 2.83:.1f} mm across at this scale, too small to read "
+                f"as a shape. Each district's own map shows them."
+            )
 
     # The page is then trimmed to the map rather than left at A4 width, which
     # for a portrait state left two thirds of the sheet empty. The floor is
@@ -369,11 +434,16 @@ def _render_coverage(*, target, config: dict, brand: Brand, output_dir: Path) ->
 
     # Sentence case, and it says which states and what kind of map, the way
     # the three-panel titles do.
-    default_title = (
-        f"Districts across {target.state_name}"
-        if multi_state
-        else f"{target.state_name} district map"
-    )
+    if only_whole and len(whole_parts) == 1:
+        default_title = f"{target.state_name} on the map of India"
+    elif only_whole:
+        default_title = f"States covered: {target.state_name}"
+    elif whole_parts:
+        default_title = f"Coverage across {target.state_name}"
+    elif multi_state:
+        default_title = f"Districts across {target.state_name}"
+    else:
+        default_title = f"{target.state_name} district map"
     title = config.get("title") or default_title
     _draw_title_block(
         figure,
@@ -388,7 +458,9 @@ def _render_coverage(*, target, config: dict, brand: Brand, output_dir: Path) ->
             else None
         ),
     )
-    _draw_coverage_legend(figure, panel, brand, target=target)
+    _draw_coverage_legend(
+        figure, panel, brand, target=target, blocks_elsewhere=blocks_hidden
+    )
 
     if brand.show_logo:
         _draw_logo(figure, brand, margin=margin, width=width, height=height)
@@ -426,25 +498,40 @@ def _render_coverage(*, target, config: dict, brand: Brand, output_dir: Path) ->
     notes.append(f"Source line: {source_line}")
     if multi_state:
         notes.append(
-            f"Map type: multi-state coverage, {len(target.target_district_lgds)} of "
-            f"{len(districts)} districts marked across {len(target.area_parts)} states."
+            f"Map type: coverage across states, {len(target.target_district_lgds)} "
+            f"districts and {len(whole_parts)} whole states marked across "
+            f"{len(target.area_parts)} states."
         )
         for part in target.area_parts:
-            notes.append(
-                f"Districts marked in {part.state_name}: "
-                + ", ".join(part.district_names)
-            )
+            if part.whole:
+                notes.append(f"{part.state_name}: marked whole, no district chosen.")
+            else:
+                notes.append(
+                    f"Districts marked in {part.state_name}: "
+                    + ", ".join(part.district_names)
+                )
         notes.append(
-            "Only the marked districts are labelled; three states of district "
-            "labels does not stay legible at A4."
+            "Only the marked districts and the chosen states are labelled, each "
+            "placed clear of borders and coastlines with a leader line where it "
+            "had to move away; three states of district labels does not stay "
+            "legible at A4."
         )
+        if panel.dotted:
+            notes.append(
+                f"{panel.dotted} covered district(s) too small to see at this scale "
+                f"are also marked with a dot."
+            )
         details = getattr(target, "district_details", [])
         if details:
             drawn = sum(len(d.units) for d in details if d.units_available)
+            where = (
+                "left off this overview"
+                if blocks_hidden
+                else "drawn inside the marked districts, unlabelled at this scale"
+            )
             notes.append(
-                f"Block detail: {drawn} units drawn inside the marked districts, "
-                f"unlabelled at this scale, and one map per district written "
-                f"beside this one ({len(details)} of them)."
+                f"Block detail: {drawn} units {where}, and one map per district "
+                f"written beside this one ({len(details)} of them)."
             )
             for detail in details:
                 if not detail.units_available:
@@ -844,19 +931,48 @@ def _widen_extent(extent, *, min_aspect, limit=None):
     return (x0, x1, y0, y1)
 
 
-def _draw_coverage_legend(figure, panel: Panel, brand: Brand, *, target) -> None:
-    """Marked against not marked, plus any site types used."""
+def _draw_coverage_legend(
+    figure, panel: Panel, brand: Brand, *, target, blocks_elsewhere: bool = False
+) -> None:
+    """Marked against not marked, plus any site types used.
+
+    Every entry describes something actually drawn: a map of whole states has
+    no pale districts to explain, and a map that left the block boundaries off
+    says where they are instead.
+    """
+    covered_colour = (
+        panel.highlight_colours[0] if panel.highlight_colours else brand.highlight
+    )
+    any_districts = bool(panel.covered_lgds) or not panel.callouts
+    if panel.whole_state_lgds and any_districts:
+        covered = "States and districts covered"
+    elif panel.whole_state_lgds:
+        covered = "States covered" if len(panel.whole_state_lgds) > 1 else "State covered"
+    else:
+        covered = "Districts covered"
     handles = [
-        Line2D([], [], marker="s", linestyle="none",
-               color=panel.highlight_colours[0] if panel.highlight_colours
-               else brand.highlight,
-               markersize=6, label="Districts covered"),
-        Line2D([], [], marker="s", linestyle="none",
-               color=panel.other_fill or brand.unit_fill, markersize=6,
-               label="Other districts in these states"
-               if panel.other_fill
-               else "Other districts"),
+        Line2D([], [], marker="s", linestyle="none", color=covered_colour,
+               markersize=6, label=covered),
     ]
+    if panel.dotted:
+        handles.append(
+            Line2D([], [], marker="o", linestyle="none", color=covered_colour,
+                   markeredgecolor=brand.background, markeredgewidth=0.6,
+                   markersize=5, label="District covered, too small to see at this scale")
+        )
+    if bool((~panel.highlight_mask).any()):
+        handles.append(
+            Line2D([], [], marker="s", linestyle="none",
+                   color=panel.other_fill or brand.unit_fill, markersize=6,
+                   label="Other districts in these states"
+                   if panel.other_fill
+                   else "Other districts")
+        )
+    if blocks_elsewhere:
+        handles.append(
+            Line2D([], [], marker="none", linestyle="none", color="none",
+                   label="Blocks are shown on each district's own map")
+        )
     if panel.sublayer is not None and len(panel.sublayer):
         if panel.sublayer_mask is not None and bool(panel.sublayer_mask.any()):
             handles.insert(
@@ -1134,13 +1250,18 @@ def _draw_panel(panel: Panel, brand: Brand) -> None:
         )
 
     targets = panel.frame[panel.highlight_mask]
+    whole = set(panel.whole_state_lgds)
     for position, (_, row) in enumerate(targets.iterrows()):
         colour = panel.highlight_colours[position % len(panel.highlight_colours)]
+        # A state marked whole is one area, so its districts are filled with
+        # no line between them. Drawn with the usual rim they made a busy
+        # texture over the whole state at national scale.
+        in_whole = bool(whole) and int(row.get("state_lgd", -1)) in whole
         gpd.GeoSeries([row.geometry], crs=panel.frame.crs).plot(
             ax=ax,
             facecolor=colour,
-            edgecolor=brand.highlight_rim,
-            linewidth=brand.width("highlight_edge"),
+            edgecolor=colour if in_whole else brand.highlight_rim,
+            linewidth=0.3 if in_whole else brand.width("highlight_edge"),
             zorder=2,
         )
 
@@ -1171,13 +1292,18 @@ def _draw_panel(panel: Panel, brand: Brand) -> None:
     # chosen states that touch run together into one wash of colour and the
     # border between them is lost.
     if panel.area_labels is not None and len(panel.area_labels):
-        panel.area_labels.plot(
-            ax=ax,
-            facecolor="none",
-            edgecolor=brand.highlight_rim,
-            linewidth=brand.width("highlight_edge"),
-            zorder=5,
-        )
+        min_size = RIM_MIN_PT / _points_per_unit(ax, panel.extent)
+        is_whole = panel.area_labels["lgd"].astype("int64").isin(panel.whole_state_lgds)
+        # A state marked whole is the deep fill right to its edge, where the
+        # teal rim disappears. Two of them that touch are parted by a white
+        # line instead, the way this brand sets lines on a dark ground.
+        for chosen, colour, width in (
+            (~is_whole, brand.highlight_rim, brand.width("highlight_edge")),
+            (is_whole, brand.background, brand.width("highlight_edge") * 1.4),
+        ):
+            rims = _rim_outlines(panel.area_labels[chosen], min_size)
+            if len(rims):
+                rims.plot(ax=ax, facecolor="none", edgecolor=colour, linewidth=width, zorder=5)
 
     # Fix the view before anything is measured against it.
     x0, x1, y0, y1 = panel.extent
@@ -1185,6 +1311,13 @@ def _draw_panel(panel: Panel, brand: Brand) -> None:
     ax.set_ylim(y0, y1)
     ax.set_aspect("equal")
     _frame_panel(ax, brand)
+
+    if panel.callouts:
+        _label_callout_map(panel, brand)
+        _caption_panel(ax, panel.caption, brand, footnote=panel.footnote)
+        _add_north_arrow(ax, brand)
+        _add_scale_bar(ax, brand)
+        return
 
     # Everything the unit labels must not collide with is drawn first, then
     # handed to the label pass as fixed obstacles.
@@ -1563,6 +1696,314 @@ def _label_water(panel: Panel, brand: Brand) -> list:
                 )
             )
     return labels
+
+
+# --------------------------------------------------------------------------
+# labels on the map across states
+# --------------------------------------------------------------------------
+
+
+def _points_per_unit(ax, extent) -> float:
+    """How many printed points one map unit (a metre) is drawn as."""
+    x0, x1, _, _ = extent
+    box = ax.get_window_extent()
+    return (box.width * 72 / ax.figure.dpi) / (x1 - x0)
+
+
+def _rim_outlines(states: gpd.GeoDataFrame, min_size: float) -> gpd.GeoSeries:
+    """The outer edge of each chosen state, for drawing its outline.
+
+    Holes are left out - an enclave such as Puducherry inside Tamil Nadu is a
+    different territory, not the state's edge - and so is any island or sliver
+    smaller than ``min_size`` across. In the heavier rim those printed as dark
+    specks scattered over the state rather than as shapes. Their fill is drawn
+    as before; only the outline skips them.
+    """
+    from shapely.geometry import Polygon
+
+    kept = []
+    for geometry in states.geometry:
+        for part in _polygons(geometry):
+            minx, miny, maxx, maxy = part.bounds
+            if max(maxx - minx, maxy - miny) < min_size:
+                continue
+            kept.append(Polygon(part.exterior))
+    return gpd.GeoSeries(kept, crs=states.crs)
+
+
+def _polygons(geometry) -> list:
+    """Every polygon in a geometry, however deeply it is nested.
+
+    Repairing an outline with ``make_valid`` can hand back a collection that
+    holds a multipolygon beside stray lines - Tamil Nadu's does - so looking
+    one level down is not enough.
+    """
+    if geometry is None or geometry.is_empty:
+        return []
+    if geometry.geom_type == "Polygon":
+        return [geometry]
+    found = []
+    for part in getattr(geometry, "geoms", []):
+        found += _polygons(part)
+    return found
+
+
+def _area_only(geometry):
+    """The polygons of a geometry as one shape, without any stray lines."""
+    from shapely.geometry import MultiPolygon
+
+    parts = _polygons(geometry)
+    return parts[0] if len(parts) == 1 else MultiPolygon(parts)
+
+
+def _furniture_boxes(extent, per_pt: float) -> list:
+    """Where the scale bar and north arrow sit, so no label lands on them.
+
+    Worked out from the same fractions ``_add_scale_bar`` and
+    ``_add_north_arrow`` draw at.
+    """
+    from shapely.geometry import box
+
+    x0, x1, y0, y1 = extent
+    w, h = x1 - x0, y1 - y0
+    bar_m = _nice_distance(w / 1000.0 * 0.22) * 1000
+    scale = box(x0, y0, x0 + w * 0.035 + bar_m + 4 * per_pt, y0 + h * 0.048 + 10 * per_pt)
+    arrow = box(x0 + w * 0.93, y0, x1, y0 + h * 0.072 + 4 * per_pt)
+    return [scale, arrow]
+
+
+def _label_callout_map(panel: Panel, brand: Brand) -> None:
+    """Name the covered districts, the chosen states and any sites.
+
+    A district on this map is a few millimetres wide, so a label started on
+    top of it - which is how the general label pass works - ends up across the
+    coastline or the state's own outline. Here each label is put into clear
+    space beside what it names instead, nearest first, with a hairline back to
+    it once it has had to move away.
+
+    A label never touches a chosen state's outline, a covered area, a dot, a
+    site, the scale bar, the north arrow or another label. Crossing another
+    state's border or the coast is allowed but costs, so a clear position wins
+    whenever there is one. A state's name goes inside the state when it fits
+    there, and beside it when it does not.
+
+    Deterministic: candidates are tried in a fixed order and a tie goes to the
+    first, so the same map always gets the same labels.
+    """
+    from shapely import prepare
+    from shapely.ops import unary_union
+
+    ax = panel.ax
+    per_pt = 1.0 / _points_per_unit(ax, panel.extent)
+    clear = CALLOUT_CLEAR_PT * per_pt
+    colour = panel.highlight_colours[0] if panel.highlight_colours else brand.highlight
+
+    frame = panel.frame
+    named = frame[frame["lgd"].astype("int64").isin(panel.covered_lgds)]
+    filled = frame[panel.highlight_mask]
+    states = panel.area_labels if panel.area_labels is not None else frame.iloc[0:0]
+
+    # Crossing a border or the coast is allowed, at a price.
+    borders = list(states.boundary)
+    if panel.context is not None:
+        borders += list(panel.context.boundary)
+    soft = unary_union(borders) if borders else None
+
+    # Never crossed. Kept apart because a state marked whole has its own name
+    # set inside its own fill, which every other label has to stay off.
+    rims = _rim_outlines(states, RIM_MIN_PT * per_pt)
+    lines = [unary_union(list(rims.boundary)).buffer(clear)] if len(rims) else []
+    fill = [filled.geometry.union_all().buffer(clear)] if len(filled) else []
+    other = _furniture_boxes(panel.extent, per_pt)
+
+    # A covered district too small to see gets a dot, and its label's leader
+    # line runs to the dot.
+    anchors = {}
+    for index, row in named.iterrows():
+        minx, miny, maxx, maxy = row.geometry.bounds
+        if max(maxx - minx, maxy - miny) / per_pt >= SMALL_MARK_PT:
+            continue
+        point = row.geometry.representative_point()
+        ax.scatter(
+            [point.x], [point.y], marker="o", s=24, color=colour,
+            edgecolor=brand.background, linewidth=0.6, zorder=7,
+        )
+        other.append(point.buffer(4 * per_pt))
+        anchors[index] = point
+        panel.dotted += 1
+
+    specs = [
+        (display(row["name"]), anchors.get(index, row.geometry), "district")
+        for index, row in named.iterrows()
+    ]
+
+    # Site markers stay where they are; their names join this pass.
+    site_texts, site_points = _draw_sites(panel, brand)
+    for text, (x, y) in zip(site_texts, site_points):
+        specs.append((text.get_text(), Point(x, y), "site"))
+        text.remove()
+        other.append(Point(x, y).buffer(4 * per_pt))
+
+    whole = set(panel.whole_state_lgds)
+    for _, row in states.iterrows():
+        kind = "whole" if int(row["lgd"]) in whole else "state"
+        specs.append((display(row["name"]), _area_only(row.geometry), kind))
+
+    placed: list = []
+    for label, geometry, kind in specs:
+        style = _callout_style(kind, brand)
+        text = ax.text(0, 0, label, ha="left", va="bottom", zorder=9, **style)
+        w, h = _text_size(text, ax, per_pt)
+
+        inside = None
+        if kind in ("state", "whole"):
+            # Inside first. A whole state's own fill is where its name goes,
+            # so only for that one is the fill not in the way.
+            keep_off = lines + other + placed + ([] if kind == "whole" else fill)
+            inside = _place_inside(geometry, w, h, clear, keep_off)
+
+        if inside is not None:
+            x, y = inside
+            if kind == "whole":
+                text.set_color(brand.background)  # white on the deep fill
+        else:
+            keep_off = unary_union(lines + fill + other + placed)
+            prepare(keep_off)
+            x, y = _place_beside(
+                geometry, w, h, per_pt=per_pt, view=panel.extent,
+                keep_off=keep_off, soft=soft,
+            )
+            _draw_leader(ax, geometry, (x, y, w, h), per_pt=per_pt, brand=brand)
+
+        text.set_position((x, y))
+        placed.append(_box(x, y, w, h).buffer(clear))
+
+
+def _callout_style(kind: str, brand: Brand) -> dict:
+    """Type for each kind of label on the map across states."""
+    if kind == "site":
+        return dict(fontsize=brand.size("site_label"), color=brand.text, fontweight="bold")
+    if kind == "state":
+        return dict(fontsize=brand.size("legend"), color=brand.text_secondary)
+    # Covered districts and states marked whole are what the map is about.
+    return dict(fontsize=brand.size("target_label"), color=brand.text, fontweight="bold")
+
+
+def _text_size(text, ax, per_pt: float) -> tuple[float, float]:
+    """A label's drawn width and height, in map units."""
+    renderer = ax.figure.canvas.get_renderer()
+    box = text.get_window_extent(renderer=renderer)
+    to_pt = 72 / ax.figure.dpi
+    return box.width * to_pt * per_pt, box.height * to_pt * per_pt
+
+
+def _box(x: float, y: float, w: float, h: float):
+    from shapely.geometry import box
+
+    return box(x, y, x + w, y + h)
+
+
+def _place_inside(geometry, w, h, clear, keep_off):
+    """A spot for a label wholly inside an area, or ``None`` if none fits.
+
+    Tried outward from the area's representative point, on a grid a quarter of
+    the label wide and half of it tall, nearest first.
+    """
+    from shapely import prepare
+    from shapely.ops import unary_union
+
+    room = geometry.buffer(-clear)
+    if room.is_empty:
+        return None
+    blocked = unary_union(keep_off) if keep_off else None
+    prepare(room)
+    if blocked is not None:
+        prepare(blocked)
+
+    centre = geometry.representative_point()
+    step_x, step_y = w / 4, h / 2
+    offsets = sorted(
+        ((i, j) for i in range(-14, 15) for j in range(-14, 15)),
+        key=lambda o: ((o[0] * step_x) ** 2 + (o[1] * step_y) ** 2, o),
+    )
+    for i, j in offsets:
+        x = centre.x + i * step_x - w / 2
+        y = centre.y + j * step_y - h / 2
+        candidate = _box(x, y, w, h)
+        if not room.contains(candidate):
+            continue
+        if blocked is not None and blocked.intersects(candidate):
+            continue
+        return x, y
+    return None
+
+
+def _place_beside(geometry, w, h, *, per_pt, view, keep_off, soft):
+    """The best spot for a label just outside what it names.
+
+    Positions are tried on rings round the shape, nearest ring first, with the
+    label set so its nearest edge or corner touches the ring. A position must
+    stay inside the panel and off everything in ``keep_off``. Of those left,
+    the cheapest wins: its distance out, plus the length of any border or
+    coastline running through it. If nothing is clear at all, the position
+    overlapping least is used rather than dropping the name.
+    """
+    x0, x1, y0, y1 = view
+    margin = 2 * per_pt
+    hull = geometry.convex_hull
+    centre = hull.centroid if hull.area > 0 else geometry.representative_point()
+
+    reach = (max(CALLOUT_GAPS_PT) * per_pt) + max(w, h)
+    local = soft.intersection(hull.buffer(reach)) if soft is not None else None
+
+    best, best_cost = None, None
+    for gap_pt in CALLOUT_GAPS_PT:
+        if best_cost is not None and best_cost < 1000 and gap_pt >= best_cost:
+            break  # nothing further out can be cheaper
+        ring = hull.buffer(gap_pt * per_pt, quad_segs=8).exterior
+        for step in range(CALLOUT_STEPS):
+            a = ring.interpolate(step / CALLOUT_STEPS, normalized=True)
+            dx, dy = a.x - centre.x, a.y - centre.y
+            length = (dx * dx + dy * dy) ** 0.5 or 1.0
+            dx, dy = dx / length, dy / length
+            x = a.x if dx > 0.38 else (a.x - w if dx < -0.38 else a.x - w / 2)
+            y = a.y if dy > 0.38 else (a.y - h if dy < -0.38 else a.y - h / 2)
+            if x < x0 + margin or x + w > x1 - margin or y < y0 + margin or y + h > y1 - margin:
+                continue
+            candidate = _box(x, y, w, h)
+            if keep_off.intersects(candidate):
+                overlap = keep_off.intersection(candidate).area / (w * h)
+                cost = 1000 + 1000 * overlap + gap_pt
+            else:
+                crossing = 0.0
+                if local is not None and not local.is_empty:
+                    crossing = local.intersection(candidate).length / per_pt
+                cost = gap_pt + 0.8 * crossing
+            if best_cost is None or cost < best_cost:
+                best, best_cost = (x, y), cost
+    if best is None:
+        point = geometry.representative_point()
+        return point.x, point.y
+    return best
+
+
+def _draw_leader(ax, geometry, label_box, *, per_pt, brand: Brand) -> None:
+    """A hairline from a label back to what it names, once it has moved away."""
+    from shapely.ops import nearest_points
+
+    x, y, w, h = label_box
+    target = _box(x, y, w, h)
+    if geometry.distance(target) / per_pt < CALLOUT_LEADER_PT:
+        return
+    start, end = nearest_points(geometry, target)
+    ax.plot(
+        [start.x, end.x],
+        [start.y, end.y],
+        color=brand.text_muted,
+        linewidth=brand.width("leader_line"),
+        solid_capstyle="butt",
+        zorder=8,
+    )
 
 
 def _draw_sites(panel: Panel, brand: Brand) -> tuple[list, list]:

@@ -315,6 +315,59 @@ class TestCombinedPdf:
         assert path.name == "madurai_locator_all_maps.pdf"
 
 
+class TestOverviewDrawing:
+    """The pieces that keep a map across states legible at national scale."""
+
+    def test_nested_polygons_are_all_found(self):
+        from shapely.geometry import GeometryCollection, LineString, MultiPolygon, box
+
+        from locator.render import _polygons
+
+        # Tamil Nadu's repaired outline is shaped like this: a collection
+        # holding a multipolygon beside stray lines.
+        nested = GeometryCollection(
+            [MultiPolygon([box(0, 0, 1, 1), box(2, 0, 3, 1)]), LineString([(0, 0), (5, 5)])]
+        )
+        assert len(_polygons(nested)) == 2
+
+    def test_the_outline_skips_holes_and_specks(self):
+        import geopandas as gpd
+        from shapely.geometry import MultiPolygon, Polygon, box
+
+        from locator.render import _rim_outlines
+
+        with_hole = Polygon(
+            [(0, 0), (100, 0), (100, 100), (0, 100)],
+            holes=[[(40, 40), (60, 40), (60, 60), (40, 60)]],
+        )
+        speck = box(200, 0, 201, 1)
+        states = gpd.GeoDataFrame(geometry=[MultiPolygon([with_hole, speck])])
+        rims = _rim_outlines(states, min_size=5)
+        assert len(rims) == 1
+        assert len(rims.iloc[0].interiors) == 0
+
+    def test_a_label_beside_a_shape_stays_off_what_it_must_avoid(self):
+        from shapely.geometry import box
+
+        from locator.render import _box, _place_beside
+
+        district = box(0, 0, 10, 10)
+        keep_off = box(-2, -2, 12, 12)  # the district and its clearance
+        x, y = _place_beside(
+            district, 20, 5, per_pt=1.0, view=(-200, 200, -200, 200),
+            keep_off=keep_off, soft=None,
+        )
+        assert not keep_off.intersects(_box(x, y, 20, 5))
+
+    def test_a_label_too_big_for_a_state_goes_outside(self):
+        from shapely.geometry import box
+
+        from locator.render import _place_inside
+
+        assert _place_inside(box(0, 0, 10, 10), 40, 5, 1.0, []) is None
+        assert _place_inside(box(0, 0, 100, 100), 40, 5, 1.0, []) is not None
+
+
 class TestFraming:
     """A tall, narrow frame is opened out rather than printed as a ribbon."""
 
