@@ -113,14 +113,14 @@ Automation/
   README.md          # written for someone who has never used a terminal
   DEPLOY.md          # Streamlit Cloud, and the route to an internal server
   requirements.txt
-  app.py             # the Streamlit dashboard (681 lines)
+  app.py             # the Streamlit dashboard (933 lines)
   locator/
     cache.py         # builds data/processed from data/raw
     cli.py           # run_from_config() - the single entry point
     data.py          # loads boundaries from the per-state cache
     geocode.py       # place-name search (Nominatim, Photon, Google)
     names.py         # name normalisation and the alias table
-    render.py        # all drawing (1,264 lines)
+    render.py        # all drawing (2,337 lines)
     sites.py         # cleaning the sites table
     style.py         # reads style/brand.yaml
     theme.py         # the dashboard's CF-branded CSS
@@ -136,7 +136,7 @@ Automation/
   maps/              # madurai, bhagalpur, balotra, karnataka_coverage,
                      #   multi_state_coverage
   assets/            # the CF logo
-  tests/             # 123 tests
+  tests/             # 134 tests
   output/            # gitignored
   .streamlit/config.toml   # CF palette for the dashboard chrome
 ```
